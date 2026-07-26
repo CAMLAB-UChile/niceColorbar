@@ -1,0 +1,65 @@
+{
+  "_schemaVersion": "1.0.0",
+
+  "niceColorbar": {
+    "inputs": [
+      {"name":"style", "kind":"ordered", "type":["choice={'modern','modern.thin','modern.thick','ultra','ultra.thin','ultra.thick'}"]},
+      {"name":"colormapName", "kind":"ordered", "type":["char"]},
+      {"name":"numColormapColors", "kind":"ordered", "type":["numeric", "scalar", "integer", "positive"]}
+    ]
+  },
+
+  "niceColorbar.colorbar": {
+    "inputs": [
+      {"name":"obj", "kind":"required", "type":["niceColorbar"]}
+    ]
+  },
+
+  "niceColorbar.setLimits": {
+    "inputs": [
+      {"name":"obj", "kind":"required", "type":["niceColorbar"]},
+      {"name":"newLimits", "kind":"required", "type":["numeric", "vector"]}
+    ]
+  },
+
+  "niceColorbar.setCappedLimits": {
+    "inputs": [
+      {"name":"obj", "kind":"required", "type":["niceColorbar"]},
+      {"name":"newLimits", "kind":"required", "type":["numeric", "vector"]}
+    ]
+  },
+
+  "niceColorbar.resetLimits": {
+    "inputs": [
+      {"name":"obj", "kind":"required", "type":["niceColorbar"]}
+    ]
+  },
+
+  "niceColorbar.saveAsPNG": {
+    "inputs": [
+      {"name":"obj", "kind":"required", "type":["niceColorbar"]},
+      {"name":"folder", "kind":"ordered", "type":["char"]},
+      {"name":"fileName", "kind":"ordered", "type":["char"]}
+    ]
+  },
+
+  "niceColorbar.saveAsPDF": {
+    "inputs": [
+      {"name":"obj", "kind":"required", "type":["niceColorbar"]},
+      {"name":"folder", "kind":"ordered", "type":["char"]},
+      {"name":"fileName", "kind":"ordered", "type":["char"]}
+    ]
+  },
+
+  "niceColorbar.saveAsFIG": {
+    "inputs": [
+      {"name":"obj", "kind":"required", "type":["niceColorbar"]},
+      {"name":"folder", "kind":"ordered", "type":["char"]},
+      {"name":"fileName", "kind":"ordered", "type":["char"]}
+    ]
+  },
+
+  "niceColorbar.session": {
+    "inputs": []
+  }
+}

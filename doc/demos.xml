@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<demos>
+  <name>niceColorbar</name>
+  <type>toolbox</type>
+  <icon>$toolbox/matlab/icons/matlabicon.gif</icon>
+
+  <demosection>
+    <label>Getting Started</label>
+    <demoitem>
+      <label>Getting Started with niceColorbar</label>
+      <type>M-file</type>
+      <source>GettingStarted</source>
+    </demoitem>
+  </demosection>
+
+  <demosection>
+    <label>Examples</label>
+    <demoitem>
+      <label>Multi-figure styling walkthrough (examples)</label>
+      <type>M-file</type>
+      <source>../examples</source>
+    </demoitem>
+  </demosection>
+</demos>
