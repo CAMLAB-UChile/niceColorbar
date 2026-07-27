@@ -1,7 +1,5 @@
 # niceColorbar
 
-![niceColorbar header](images/readmeHeader.png)
-
 A drop-in, styled replacement for MATLAB's `colorbar` — six size/style presets, a
 LaTeX-capable title and corner logo, light/dark theme awareness, and
 auto-refresh: change a property after the colorbar is built and it updates in
@@ -14,6 +12,14 @@ export.
 **First time here?** Follow this path: `QuickStart.m` (see it work) →
 `doc/GettingStarted.m` (tour the commands/options) → `examples.m` (many more
 worked examples).
+
+![niceColorbar header](images/readmeHeader.png)
+
+Dark mode niceColorbar samples.
+
+![niceColorbar header light](images/readmeHeaderLight.png)
+
+Light mode niceColorbar samples.
 
 ## Requirements
 
