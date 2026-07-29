@@ -21,6 +21,42 @@ Dark mode niceColorbar samples.
 
 Light mode niceColorbar samples.
 
+## Features
+
+- Six size/style presets (`modern`, `modern.thin`, `modern.thick`, `ultra`,
+  `ultra.thin`, `ultra.thick`) and any colormap `colormaplist()` recognizes,
+  plus a set of custom colormaps unique to niceColorbar (see
+  [Colormaps](#colormaps)).
+- Auto-refresh: change a property after `colorbar()` has run and the live
+  colorbar updates in place, no rebuild call required.
+- LaTeX/TeX-capable, multi-line `Title`, with per-line color control via
+  `TitleColor`.
+- A corner `Logo` with independent per-segment coloring via inline
+  `\color[rgb]{...}` tags.
+- Light/dark theme awareness (`ThemeMode`), including an `'auto'` mode that
+  follows MATLAB's current theme, kept in sync across every instance on a
+  shared figure.
+- Works the same way on 2-D plots (`contourf`, `imagesc`, ...) and 3-D plots
+  (`surf`, ...), including through interactive rotation/pan.
+- One instance per subplot on a shared figure — multiple colorbars stay
+  independent without clobbering each other's layout or resize handling.
+- `Side` placement: `'right'` (default), `'left'`, `'top'`, or `'bottom'`.
+- Plain and capped color limits (`setLimits`/`setCappedLimits`/`resetLimits`),
+  with configurable `CappedColorBelow`/`CappedColorAbove`.
+- Auto-scaled tick labels with a common `×10ⁿ` exponent annotation
+  (`TickLabelsAutoScale`), for data whose limits sit far from order-1.
+- Independent visibility toggles for the bar, title, and logo
+  (`ColorbarVisible`/`TitleVisible`/`LogoVisible`).
+- One-line PNG/PDF/FIG figure export (`saveAsPNG`/`saveAsPDF`/`saveAsFIG`),
+  with configurable export resolution (`ExportResolution`) and PDF render
+  mode (`PdfRender`).
+- `session()`: a keyboard-driven interactive console for adjusting a
+  colorbar without writing throwaway script code.
+
+The [Autoscale feature](#autoscale-feature) and [Interactive
+session](#interactive-session) sections below cover two of these in more
+detail.
+
 ## Requirements
 
 - MATLAB R2024b or later (uses `arguments` blocks, property listeners, and
@@ -52,7 +88,7 @@ xlabel("x","FontName","Arial","FontSize",18);           % put x-label
 ylabel("y","FontName","Arial","FontSize",18);           % put y-label
 
 % 2: Initial colorbar with title
-nc = niceColorbar('modern', 'turbo', 10);               % instantiate a niceColorbar object
+nc = niceColorbar('modern.thick', 'autumn', 10);        % instantiate a niceColorbar object
 nc.ThemeMode = "light";                                 % set theme mode
 nc.Title = {'My title'};                                % set title
 nc.Side = "top";                                        % colorbar location
@@ -66,7 +102,7 @@ nc.saveAsFIG();                                         % save as MATLAB figure
 
 ```matlab
 % 3: Update colorbar (properties auto-refresh the live colorbar - no rebuild needed)
-nc.Style = "ultra";                                     % update colorbar style
+nc.Style = "ultra.thin";                                % update colorbar style
 nc.Title = {'Updated','Title'};                         % update title
 nc.TitleColor = {[0.28,0.32,0.95],[0.17,0.61,0.39]};    % custom color for updated title
 nc.ColormapName = 'cool';                               % update colormap
@@ -75,8 +111,8 @@ nc.TickLabelsFontName = "Segoe UI";                     % update tick labels fon
 nc.TickLabelsFontSize = 12;                             % update tick labels font size
 nc.Side = "left";                                       % update colorbar location
 nc.TickLabelsFormat = '%+.2f';                          % update tick label format
-nc.Logo = ['\color[rgb]{0.3608 0.4 0.43529}THIS',...    % put a logo
-           '\color[rgb]{0.9 0.11 1.0}LOGO'];
+nc.Logo = ['\color[rgb]{0.3608,0.4,0.43529}NICE',...    % put a logo
+           '\color[rgb]{0.9,0.11,1.0}CLBR'];
 nc.LogoFontName = "Impact";                             % set logo font name
 nc.saveAsPNG();                                         % save figure as PNG image
 nc.saveAsPDF();                                         % print figure to a PDF file
@@ -88,6 +124,36 @@ nc.saveAsFIG();                                         % save as MATLAB figure
 See `examples.m` for a multi-figure walkthrough (styles, LaTeX titles, logos,
 per-line title colors, theme overrides) and `doc/GettingStarted.m` for a
 guided tour.
+
+## Autoscale feature
+
+When a plot's values sit far from order-1 (e.g. limits like `[4990 5010]`),
+raw tick labels get crowded and hard to read. Setting
+`TickLabelsAutoScale = true` keeps `clim`/`Limits` in real data units, but
+divides the tick *labels* by a common power of ten `n` (derived from the
+current limits) and auto-prepends a `×10ⁿ` annotation above the bar, exactly
+like MATLAB's classic axis exponent behavior. `TickLabelsAutoScaleDecimals`
+controls how many decimal digits the scaled labels show (overriding
+`TickLabelsFormat` while autoscale is on). On a 3-D axes, the plot's own Z
+ruler is kept in lockstep — same exponent, same decimal count — so the
+colorbar and the Z tick labels always agree.
+
+```matlab
+nc.TickLabelsAutoScale = true;         % autoscale tick labels and use
+                                       % scientific notation with a common
+                                       % exponent across all tick labels
+nc.TickLabelsAutoScaleDecimals = 2;    % number of decimal digits shown
+                                       % (TickLabelsFormat is ignored while
+                                       % TickLabelsAutoScale is true)
+```
+
+![niceColorbar autoscale, colorbar on the right](images/autoscaleRight.png)
+
+Autoscale for the colorbar located right.
+
+![niceColorbar autoscale, colorbar on the bottom](images/autoscaleBottom.png)
+
+Autoscale for the colorbar located bottom.
 
 ## Interactive session
 
@@ -111,6 +177,11 @@ Commands: help, limits, limits.capped, limits.reset, style, colors, colormap, ..
 niceColorbar>
 ```
 
+Alternatively, if `niceColorbar.session()` was not placed in the `.m` file,
+it can also be called directly from MATLAB's Command Window after the
+script has run — the session targets whichever figure currently has focus,
+so there's no need to add the call to the script beforehand.
+
 Each command targets whichever figure currently has focus
 (`groot().CurrentFigure`) at the moment it's entered — since MATLAB keeps
 servicing figure-click events while the session waits on keyboard input,
@@ -129,6 +200,8 @@ at any time to reprint the command list; `exit` ends the session.
 | `colors` | Prompts for a color count and assigns `NumColormapColors`. |
 | `colormap` | Prompts for a colormap name and assigns `ColormapName`. |
 | `dark` / `light` | Sets `ThemeMode` on every `niceColorbar` instance on the current figure. |
+| `autoscale.on` | Prompts for a decimal count (blank = 2), assigns `TickLabelsAutoScaleDecimals`, then sets `TickLabelsAutoScale = true`. |
+| `autoscale.off` | Sets `TickLabelsAutoScale = false`. |
 | `hide.colorbar` / `show.colorbar` | Toggles `ColorbarVisible`. |
 | `hide.title` / `show.title` | Toggles `TitleVisible`. |
 | `hide.logo` / `show.logo` | Toggles `LogoVisible`. |
@@ -173,10 +246,10 @@ because of MATLAB char/string semantics differences that show up there:
 
   ```matlab
   % correct - one line, two colors
-  nc.Logo = ['\color[rgb]{0.36 0.4 0.44}THIS', '\color[rgb]{0.8 0.25 0.22}LOGO'];
+  nc.Logo = ['\color[rgb]{0.36,0.4,0.44}THIS', '\color[rgb]{0.8,0.25,0.22}LOGO'];
 
   % silently wrong - renders as two lines instead of one
-  nc.Logo = ["\color[rgb]{0.36 0.4 0.44}THIS", "\color[rgb]{0.8 0.25 0.22}LOGO"];
+  nc.Logo = ["\color[rgb]{0.36,0.4,0.44}THIS", "\color[rgb]{0.8,0.25,0.22}LOGO"];
   ```
 
 These three cases are locked in by regression tests in `niceColorbarTest.m`.
@@ -190,10 +263,10 @@ These three cases are locked in by regression tests in `niceColorbarTest.m`.
 | `setLimits(newLimits)` | Sets `clim` to `newLimits = [minVal maxVal]`. Requires `colorbar()` to have been called first. |
 | `setCappedLimits(newLimits)` | Like `setLimits`, but caps out-of-range values to `CappedColorBelow`/`CappedColorAbove` instead of stretching the gradient. Requires `colorbar()` to have been called first. |
 | `resetLimits()` | Reverts limits to what they were when `colorbar()` was first called, clearing capped mode. |
-| `saveAsPNG(folder, fileName)` | Exports the attached figure as a PNG (300 DPI). Both arguments are optional — omitted, a name is auto-generated from the figure number and a timestamp and written to a `SavedFigures` folder inside the toolbox. |
-| `saveAsPDF(folder, fileName)` | Like `saveAsPNG`, but exports a vector PDF via `exportgraphics`. |
+| `saveAsPNG(folder, fileName)` | Exports the attached figure as a PNG at `ExportResolution` DPI (default 300). Both arguments are optional — omitted, a name is auto-generated from the figure number and a timestamp and written to a `SavedFigures` folder inside the toolbox. |
+| `saveAsPDF(folder, fileName)` | Like `saveAsPNG`, but exports a PDF via `exportgraphics`, rasterized or vector depending on `PdfRender`. |
 | `saveAsFIG(folder, fileName)` | Like `saveAsPNG`, but saves an editable MATLAB `.fig` file via `savefig`, re-openable with the colorbar and its styling intact. |
-| `session()` *(static)* | Interactive console loop for adjusting the colorbar under keyboard focus (`limits`, `limits.capped`, `limits.reset`, `style`, `colors`, `colormap`, `dark`, `light`, `hide.colorbar`, `show.colorbar`, `hide.title`, `show.title`, `hide.logo`, `show.logo`, `hide.all`, `show.all`, `side.left`, `side.right`, `side.top`, `side.bottom`, `save.png`, `save.pdf`, `save.fig`, `exit`). |
+| `session()` *(static)* | Interactive console loop for adjusting the colorbar under keyboard focus (`limits`, `limits.capped`, `limits.reset`, `style`, `colors`, `colormap`, `dark`, `light`, `autoscale.on`, `autoscale.off`, `hide.colorbar`, `show.colorbar`, `hide.title`, `show.title`, `hide.logo`, `show.logo`, `hide.all`, `show.all`, `side.left`, `side.right`, `side.top`, `side.bottom`, `save.png`, `save.pdf`, `save.fig`, `exit`). |
 
 ## Properties
 
@@ -217,6 +290,8 @@ auto-refreshes in place, no rebuild call required.
 | `TickLabelsFontSize` | `nc.TickLabelsFontSize = 12;` |
 | `TickLabelsFontWeight` | `nc.TickLabelsFontWeight = "bold";` |
 | `TickLabelsFormat` | `nc.TickLabelsFormat = '%.2f';` |
+| `TickLabelsAutoScale` | `nc.TickLabelsAutoScale = true;` |
+| `TickLabelsAutoScaleDecimals` | `nc.TickLabelsAutoScaleDecimals = 2;` |
 | `TickLineWidth` | `nc.TickLineWidth = 1.5;` |
 | `TickLineColor` | `nc.TickLineColor = "w";` |
 | `Style` | `nc.Style = "modern.thick";` |
@@ -228,6 +303,8 @@ auto-refreshes in place, no rebuild call required.
 | `TitleVisible` | `nc.TitleVisible = "off";` |
 | `LogoVisible` | `nc.LogoVisible = "off";` |
 | `Side` | `nc.Side = "top";` |
+| `PdfRender` | `nc.PdfRender = "vector";` |
+| `ExportResolution` | `nc.ExportResolution = 600;` |
 
 `ColorbarVisible`/`TitleVisible`/`LogoVisible` each take `'on'`/`'off'` and
 independently hide/show the bar, title, or logo in place, without discarding
@@ -235,7 +312,11 @@ or rebuilding anything; set all three to hide/show everything at once. `Side`
 takes `'right'` (default), `'left'`, `'top'`, or `'bottom'` — which side of
 the plot the colorbar, title, and logo are placed on; for `'top'`/`'bottom'`
 the colorbar runs horizontally with the Title to its left and the Logo to its
-right, both read horizontally.
+right, both read horizontally. `PdfRender` takes `'image'` (default,
+rasterized, fast) or `'vector'` (crisp/scalable, slower) and controls
+`saveAsPDF`'s `exportgraphics` `ContentType`; `ExportResolution` is the
+pixels-per-inch used by `saveAsPNG` and by `saveAsPDF` while `PdfRender` is
+`'image'`.
 
 Each niceColorbar instance tracks its own figure/axes, so multiple instances
 (e.g. one per subplot, or one per docked figure) refresh independently.
@@ -295,7 +376,7 @@ niceColorbar is free to use. If it contributes to a plot or figure that
 appears in a publication, report, thesis, or other professional work, please
 cite it:
 
-> Ortiz-Bernardin, A. (2026). *niceColorbar* (Version 1.0.0) [MATLAB
+> Ortiz-Bernardin, A. (2026). *niceColorbar* (Version 1.1.0) [MATLAB
 > toolbox]. https://github.com/CAMLAB-UChile/niceColorbar
 
 A [`CITATION.cff`](CITATION.cff) file is also included, which GitHub uses to

@@ -2,8 +2,8 @@ cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 type: software
 title: niceColorbar
-version: 1.0.0
-date-released: 2026-07-26
+version: 1.1.0
+date-released: 2026-07-29
 url: "https://github.com/CAMLAB-UChile/niceColorbar"
 license: BSD-3-Clause
 authors:

@@ -8,6 +8,8 @@ classdef niceColorbar < handle
   %   See also NICECOLORBAR/COLORBAR, NICECOLORBAR/SETLIMITS,
   %   NICECOLORBAR/SETCAPPEDLIMITS, NICECOLORBAR/RESETLIMITS.
 
+  % Author: Alejandro Ortiz-Bernardin, aortizb@uchile.cl, camlab.cl/alejandro
+
   properties (SetObservable, AbortSet) % default properties
     % SetObservable + AbortSet is what enables auto-update: every one of
     % these fires a PostSet event when it actually changes value (AbortSet
@@ -19,6 +21,22 @@ classdef niceColorbar < handle
     TickLabelsFontSize = 10
     TickLabelsFontWeight = "normal"
     TickLabelsFormat = '%+.2e' % '%+.2e', '%.2e', '%.2f', '%.4e', '%.4f', etc
+    TickLabelsAutoScale = false % when true, tick VALUES/Limits/clim stay in real data
+                                % units, but tick LABELS are divided by 10^n before being
+                                % formatted, and a "x10^n" line is auto-prepended above
+                                % Title (rendered with TitleInterpreter, matching Title's
+                                % own styling). n = floor(log10(max(abs(current Limits))));
+                                % n=0 (values already order-1) suppresses scaling/annotation
+                                % entirely. E.g. Limits [-3e-3 4e-3] -> n=-3, ticks label as
+                                % -3,-2,0,1,3,4 with "x10^-3" shown above the bar.
+                                % While TickLabelsAutoScale is true, tick labels always use
+                                % '%+.<TickLabelsAutoScaleDecimals>f' instead of
+                                % TickLabelsFormat - a scaled value like -3 read alongside
+                                % an exponential TickLabelsFormat (e.g. '%+.2e') would be
+                                % confusing, so autoscale mode owns its own fixed-point format.
+    TickLabelsAutoScaleDecimals = 2 % number of decimal digits used by the '%+.<n>f' format
+                                    % that overrides TickLabelsFormat while TickLabelsAutoScale
+                                    % is true; ignored otherwise
     TickLineWidth = 1.0
     TickLineColor = "k" % used only when colorbar lines are not hidden
     Title = {} % {['(step = ',int2str(10),')'],'$u_{1,h}$'};
@@ -29,7 +47,7 @@ classdef niceColorbar < handle
     TitleColor = [] % [] auto-follows the theme for the whole Title; a single color/RGB triplet
                      % overrides the whole Title; a cell array matching Title's lines (each entry
                      % [] or a color) colors each line independently
-    Logo = {} %['\color[rgb]{0.360784 0.4 0.435294}THIS','\color[rgb]{0.8000 0.2510 0.2235}LOGO'];
+    Logo = {} %['\color[rgb]{0.360784,0.4,0.435294}THIS','\color[rgb]{0.8000,0.2510,0.2235}LOGO'];
     LogoFontName = "Times New Roman" %'Segoe UI Semibold';
     LogoFontSize = 16
     LogoFontWeight = "normal"
@@ -53,6 +71,18 @@ classdef niceColorbar < handle
                    % Title to its left and the Logo to its right, both read
                    % horizontally (unlike 'left'/'right', where Title sits above
                    % and Logo below a vertical colorbar).
+    PdfRender = "image" % 'image' (default) or 'vector' - exportgraphics'
+                        % ContentType used by saveAsPDF()/session()'s save.pdf.
+                        % 'vector' preserves crisp, infinitely-scalable text/lines
+                        % but is slow and prone to exportgraphics' own
+                        % "Vectorized content might take a long time..." warning
+                        % (suppressed automatically while 'vector' is selected -
+                        % see saveFigureAs()); 'image' rasterizes instead, same
+                        % as saveAsPNG(), trading scalability for speed/reliability.
+    ExportResolution = 300 % pixels-per-inch used by saveAsPNG() and by saveAsPDF()
+                           % while PdfRender is 'image' - exportgraphics ignores it
+                           % entirely for PdfRender='vector' (vector content has no
+                           % fixed resolution).
   end
 
   properties (Access = private)
@@ -64,18 +94,50 @@ classdef niceColorbar < handle
            % tied to the axis ruler and goes invisible along with the
            % colorbar itself, which would make LogoVisible impossible to
            % keep independent of ColorbarVisible)
+    ExpLabelObj % TickLabelsAutoScale's auto "x10^n" annotation, parented to ax
+                % (or a figure-level annotation textbox for a 3-D axes) exactly
+                % like ylb above - a standalone object, deliberately kept
+                % separate from TitleLineObjs so it never consumes/renumbers
+                % the user's own Title lines or TitleColor entries
+    ZExpLabelObj % standalone stand-in for a 3-D axes' native ZAxis.SecondaryLabel
+                % ("x10^n" text) while TickLabelsAutoScale is on - the native
+                % object is hidden (never repositioned directly: writing its
+                % Position even once permanently disables MATLAB's own
+                % adaptive camera-tracking placement for it, verified
+                % empirically - toggling ExponentMode/Visible/Exponent
+                % afterward never restores it). This mirrors it instead: a
+                % plain text() in 'data' units, parented to ax, positioned
+                % from the native label's own still-live Position each
+                % applyProperties call (offset 20 px up) - being a normal
+                % 3-D data-space object, it re-projects with the camera
+                % automatically between calls exactly like the native ticks,
+                % no per-frame polling needed
     Built = false     % true once colorbar() has run at least once
     PropListener      % PostSet listener driving auto-refresh on mutation
     ViewListener      % PostSet listener on obj.ax's View, driving a cheap
                        % re-layout after interactive 3-D rotation (see colorbar())
-    RotateSettleTimer % reused singleShot timer (stop+restart, not recreated -
-                       % see scheduleAccurateRotateRefresh) that runs one accurate,
-                       % live-measured layout pass once rotation settles
+    SettleTimer       % reused singleShot timer (stop+restart, not recreated -
+                       % see scheduleSettleRefresh) that polls until rotation
+                       % OR a plain resize truly settles, then runs one
+                       % accurate, live-measured layout pass
+    SettlePollMarker  % obj.ax's last-observed pixel Position while polling for
+                       % settlement (see onSettleRefresh) - [] between bursts
+    SettlePollCount = 0 % number of consecutive settle-poll retries so far this
+                       % burst, capped in onSettleRefresh
+    LastKnownFigPos   % obj.fig's pixel Position as of the last
+                       % pollForMissedResize() check - see that method
+    LastKnownAxPos    % obj.ax's pixel Position as of the last
+                       % pollForMissedResize() check - see that method
     SuspendRefresh = false % true while batching several property writes (e.g.
                             % hide.all/show.all) into a single refresh(), so
                             % the layout doesn't visibly flash through the
                             % in-between states of a multi-property change
     ResizeLayout       % layout struct cached for the SizeChangedFcn hot path
+    TickLabelExtent = [0 0] % [width height] of the widest current tick label,
+                            % cached here (computed once per applyProperties call,
+                            % NOT per resize tick) for positioning the
+                            % TickLabelsAutoScale exponent annotation - see
+                            % measureTickLabelExtent()/updateColorbarLayout
     TitleLineObjs = {} % one text object per Title line, used only in per-line TitleColor mode (see applyProperties)
     ThemeBgColor = [1 1 1]   % background color, set from MATLAB's light/dark mode at build time
     ThemeFontColor = [0 0 0] % font/axes-line color, set from MATLAB's light/dark mode at build time
@@ -140,6 +202,16 @@ classdef niceColorbar < handle
       checkAndAssign('TickLabelsFormat',val,{@mustBeText}, ...
         'value must be a character vector');
       obj.TickLabelsFormat = val;
+    end
+    function set.TickLabelsAutoScale(obj,val)
+      checkAndAssign('TickLabelsAutoScale',val,{@(v)mustBeMember(v,[true false])}, ...
+        'value must be a logical scalar');
+      obj.TickLabelsAutoScale = val;
+    end
+    function set.TickLabelsAutoScaleDecimals(obj,val)
+      checkAndAssign('TickLabelsAutoScaleDecimals',val,{@mustBeInteger,@mustBeNonnegative}, ...
+        'value must be a nonnegative integer');
+      obj.TickLabelsAutoScaleDecimals = val;
     end
     function set.TickLineWidth(obj,val)
       checkAndAssign('TickLineWidth',val,{@mustBeNumeric,@mustBeNonnegative}, ...
@@ -250,6 +322,16 @@ classdef niceColorbar < handle
         'value must be ''right'', ''left'', ''top'', or ''bottom'' ');
       obj.Side = val;
     end
+    function set.PdfRender(obj,val)
+      checkAndAssign('PdfRender',val,{@(v)mustBeMember(v,{'vector','image'})}, ...
+        'value must be ''vector'' or ''image'' ');
+      obj.PdfRender = val;
+    end
+    function set.ExportResolution(obj,val)
+      checkAndAssign('ExportResolution',val,{@mustBeInteger,@mustBePositive}, ...
+        'value must be a positive integer');
+      obj.ExportResolution = val;
+    end
 
   end
 
@@ -302,6 +384,10 @@ classdef niceColorbar < handle
         delete(obj.ylb);
       end
       obj.ylb = [];
+      if ~isempty(obj.ExpLabelObj) && isvalid(obj.ExpLabelObj)
+        delete(obj.ExpLabelObj);
+      end
+      obj.ExpLabelObj = [];
       for i = 1:numel(obj.TitleLineObjs)
         if isvalid(obj.TitleLineObjs{i})
           delete(obj.TitleLineObjs{i});
@@ -309,7 +395,8 @@ classdef niceColorbar < handle
       end
       obj.TitleLineObjs = {};
 
-      %% create a colorbar
+      %% create a colorbar: this is the in-built MATLAB's colorbar that is wrapped by 
+      % niceColorbar's colorbar public method
       obj.clb = colorbar("FontName",obj.TickLabelsFontName,"FontSize",obj.TickLabelsFontSize,...
                          "FontWeight",obj.TickLabelsFontWeight,"LineWidth",obj.TickLineWidth,...
                          "Color",obj.TickLineColor);
@@ -339,6 +426,51 @@ classdef niceColorbar < handle
       niceColorbar.resizeHub('register',obj.fig,obj);
       set(obj.fig,'SizeChangedFcn',@(src,~) niceColorbar.resizeHub('dispatch',src));
 
+      %% SizeChangedFcn does NOT reliably fire for every way a figure can
+      % resize either: confirmed, via direct testing in a live session,
+      % that toggling the desktop's "maximize figure" toolstrip icon on a
+      % DOCKED figure changes obj.fig.Position (verified correct
+      % immediately afterward) WITHOUT ever invoking SizeChangedFcn - so
+      % onResize() (and everything it schedules) silently never runs,
+      % leaving the colorbar/Title/Logo exactly where they were before the
+      % toggle. A plain drag-resize of the same docked panel, by contrast,
+      % fires SizeChangedFcn correctly every time - this gap is specific to
+      % that one toolstrip interaction. Figure's own Position property also
+      % isn't SetObservable (addlistener errors), so there's no PostSet
+      % event to hook instead - a low-frequency poll is the only way left
+      % to catch this. Checking obj.fig.Position (a cheap read) once a
+      % second and only invoking onResize() when it actually changed keeps
+      % the ongoing cost negligible; reuses the exact same
+      % onResize->scheduleSettleRefresh pipeline a real SizeChangedFcn event
+      % would have driven, so the fix for THAT lag (see onSettleRefresh)
+      % applies here too.
+      %
+      % A background 1Hz poll is only worth running while obj.fig is
+      % visible - the toolstrip interaction it exists to catch can only
+      % ever happen on a figure the user can actually see and click on -
+      % which this checks fresh on every shared-timer tick (see
+      % sharedPollTimer) rather than starting/stopping a per-instance timer
+      % off a 'Visible' PostSet listener the way an earlier version did.
+      %
+      % ONE shared timer for every live niceColorbar instance (rather than
+      % one independent timer per instance) - an earlier per-instance
+      % design was suspected of contributing to a rare but serious bug:
+      % docking several figures into one group at once could leave a
+      % docked tab rendering another tab's stale/duplicated colorbar
+      % content, and that bug tracked with the NUMBER of independently
+      % ticking timers all reacting to the same external dock event on
+      % their own schedule (each doing its own drawnow/Position-write) -
+      % a controlled comparison against plain MATLAB colorbar (same
+      % figure/subplot count, zero of niceColorbar's background timers)
+      % came back clean, isolating niceColorbar's own machinery as the
+      % likely factor. One coordinated pass per tick, over every
+      % registered instance, replaces that race with a single-threaded
+      % sweep - mirroring how resizeHub already centralizes SizeChangedFcn
+      % dispatch for the same reason.
+      obj.LastKnownFigPos = [];
+      obj.LastKnownAxPos = [];
+      niceColorbar.sharedPollTimer('ensure');
+
       %% keep the layout in sync with interactive 3-D rotation too. Unlike
       % a plain window resize (always fires SizeChangedFcn), rotating a
       % 3-D view via the axes toolbar's Rotate button doesn't touch figure
@@ -367,7 +499,7 @@ classdef niceColorbar < handle
       % from under it (e.g. the figure is closed mid-rotation), rather than
       % leaving a running timer (and its captured reference to obj)
       % dangling.
-      addlistener(obj.ax,'ObjectBeingDestroyed',@(~,~) obj.cancelAccurateRotateRefresh());
+      addlistener(obj.ax,'ObjectBeingDestroyed',@(~,~) obj.cancelSettleRefresh());
 
       %% wire up auto-refresh: from this point on, mutating any public
       % property (Title, Style, ColormapName, fonts, etc.) automatically
@@ -598,6 +730,30 @@ classdef niceColorbar < handle
             for i = 1:numel(list)
               list{i}.ThemeMode = 'light';
             end
+          case 'autoscale.on'
+            obj = niceColorbar.currentInstance();
+            if isempty(obj)
+              disp('No niceColorbar is registered on the current figure.');
+              continue
+            end
+            decimalsVal = readNumberPrompt('  -> Enter number of decimals (blank = 2): ');
+            if isnan(decimalsVal)
+              decimalsVal = 2; % default when the user just presses Enter
+            end
+            try
+              obj.TickLabelsAutoScaleDecimals = decimalsVal; % setter validates and auto-refreshes the live colorbar
+            catch ME
+              disp(['Could not set number of decimals: ',ME.message]);
+              continue
+            end
+            obj.TickLabelsAutoScale = true; % setter validates and auto-refreshes the live colorbar
+          case 'autoscale.off'
+            obj = niceColorbar.currentInstance();
+            if isempty(obj)
+              disp('No niceColorbar is registered on the current figure.');
+              continue
+            end
+            obj.TickLabelsAutoScale = false; % setter validates and auto-refreshes the live colorbar
           case 'hide.colorbar'
             obj = niceColorbar.currentInstance();
             if isempty(obj)
@@ -698,6 +854,16 @@ classdef niceColorbar < handle
               disp('No niceColorbar is registered on the current figure.');
               continue
             end
+            resolutionVal = readNumberPrompt('  -> Enter export resolution in DPI (blank = 300): ');
+            if isnan(resolutionVal)
+              resolutionVal = 300; % default when the user just presses Enter
+            end
+            try
+              obj.ExportResolution = resolutionVal; % setter validates and auto-refreshes the live colorbar
+            catch ME
+              disp(['Could not set export resolution: ',ME.message]);
+              continue
+            end
             [fileName,folder] = uiputfile('*.png','Save PNG as','figure.png');
             if isequal(fileName,0)
               disp('Save cancelled.');
@@ -713,6 +879,28 @@ classdef niceColorbar < handle
             if isempty(obj)
               disp('No niceColorbar is registered on the current figure.');
               continue
+            end
+            renderTxt = strtrim(input('  -> Enter render type: vector/image (blank = image): ','s'));
+            if isempty(renderTxt)
+              renderTxt = 'image'; % default when the user just presses Enter
+            end
+            try
+              obj.PdfRender = renderTxt; % setter validates and auto-refreshes the live colorbar
+            catch ME
+              disp(['Could not set render type: ',ME.message]);
+              continue
+            end
+            if obj.PdfRender == "image"
+              resolutionVal = readNumberPrompt('  -> Enter export resolution in DPI (blank = 300): ');
+              if isnan(resolutionVal)
+                resolutionVal = 300; % default when the user just presses Enter
+              end
+              try
+                obj.ExportResolution = resolutionVal; % setter validates and auto-refreshes the live colorbar
+              catch ME
+                disp(['Could not set export resolution: ',ME.message]);
+                continue
+              end
             end
             [fileName,folder] = uiputfile('*.pdf','Save PDF as','figure.pdf');
             if isequal(fileName,0)
@@ -759,9 +947,10 @@ classdef niceColorbar < handle
       % continuations does not - it just builds one long line that looks
       % broken up in the source but prints as a single wide line.
       commands = {'help','limits','limits.capped','limits.reset','style','colors','colormap', ...
-                  'dark','light','hide.colorbar','show.colorbar','hide.title','show.title', ...
-                  'hide.logo','show.logo','hide.all','show.all','side.left','side.right', ...
-                  'side.top','side.bottom','save.png','save.pdf','save.fig','exit'};
+                  'dark','light','autoscale.on','autoscale.off','hide.colorbar','show.colorbar', ...
+                  'hide.title','show.title','hide.logo','show.logo','hide.all','show.all', ...
+                  'side.left','side.right','side.top','side.bottom','save.png','save.pdf', ...
+                  'save.fig','exit'};
       fprintf('Commands:\n%s\n',wrapCommaList(commands,100));
     end
 
@@ -790,9 +979,37 @@ classdef niceColorbar < handle
         case 'register'
           if isKey(registry,key)
             list = registry(key);
-            % drop stale handles and this same instance if re-registering
-            % (e.g. colorbar() called again to rebind to a new axes)
-            list = list(cellfun(@(h) isvalid(h) && h~=obj, list));
+            keep = true(size(list));
+            for i = 1:numel(list)
+              h = list{i};
+              if ~isvalid(h)
+                keep(i) = false;
+              elseif h == obj || isequal(h.ax,obj.ax)
+                % h==obj: re-registering this same instance (e.g.
+                % colorbar() called again to rebind to a new axes).
+                % isequal(h.ax,obj.ax): a DIFFERENT, now-orphaned
+                % niceColorbar instance still wraps this very same axes -
+                % e.g. a script re-run (without a full close all/clear)
+                % that reuses the same figure/axes and builds a fresh
+                % niceColorbar on it, leaving the old object with no
+                % remaining variable reference in the user's workspace
+                % but kept alive forever anyway by its own
+                % SettleTimer/ResizePollTimer closures (a handle-class
+                % self-reference cycle - confirmed via timerfindall
+                % showing timer pairs accumulating well beyond the number
+                % of live figures after repeated re-runs). Stop/delete
+                % its timers so it can actually be garbage collected
+                % instead of continuing to fight the new instance for
+                % control of the same Title/Logo/colorbar objects -
+                % exactly the overlapping/garbled rendering this was
+                % reported to cause.
+                if h ~= obj
+                  h.cancelSettleRefresh();
+                end
+                keep(i) = false;
+              end
+            end
+            list = list(keep);
           else
             list = {};
           end
@@ -826,6 +1043,47 @@ classdef niceColorbar < handle
           % action is always one of 'register'/'dispatch'/'get', all called
           % internally from this file - no other value is ever passed
           error('niceColorbar:resizeHub:invalidAction','unknown action ''%s''',action);
+      end
+    end
+
+    function sharedPollTimer(action)
+      % ONE timer shared by every live niceColorbar instance - the watchdog
+      % that catches figure resizes SizeChangedFcn misses entirely (see
+      % colorbar()'s comment on why this exists at all). Replaces an
+      % earlier one-timer-per-instance design: reuses resizeHub's own
+      % per-figure registry rather than keeping a second list in sync, so
+      % every registered instance (across every open figure) gets checked
+      % in a single sweep per tick instead of N independent timers each
+      % reacting to the same external event on their own schedule.
+      persistent t
+      switch action
+        case 'ensure'
+          % idempotent - safe to call from every colorbar() build
+          if isempty(t) || ~isvalid(t)
+            t = timer('ExecutionMode','fixedRate','Period',1, ...
+              'TimerFcn',@(~,~) niceColorbar.sharedPollTimer('tick'));
+          end
+          if strcmp(t.Running,'off')
+            start(t);
+          end
+        case 'tick'
+          figs = findall(groot,'Type','figure');
+          for i = 1:numel(figs)
+            fig = figs(i);
+            % cheap skip: the toolstrip "maximize figure" gap this exists
+            % to catch can only ever happen on a figure the user can
+            % actually see - and most figures in a full test-suite run
+            % are Visible='off', so this keeps their cost near zero
+            if ~isvalid(fig) || ~strcmp(fig.Visible,'on')
+              continue
+            end
+            list = niceColorbar.resizeHub('get',fig);
+            for j = 1:numel(list)
+              list{j}.pollForMissedResize();
+            end
+          end
+        otherwise
+          error('niceColorbar:sharedPollTimer:invalidAction','unknown action ''%s''',action);
       end
     end
 
@@ -919,9 +1177,20 @@ classdef niceColorbar < handle
       pause(0.2);
       switch format
         case 'png'
-          exportgraphics(obj.fig,filePath,'Resolution',300);
+          exportgraphics(obj.fig,filePath,'Resolution',obj.ExportResolution);
         case 'pdf'
-          exportgraphics(obj.fig,filePath,'ContentType','vector');
+          if obj.PdfRender == "vector"
+            % exportgraphics warns every time vector content is requested
+            % ("Vectorized content might take a long time...") - expected
+            % and harmless given the user explicitly opted into 'vector',
+            % so silence just this one warning ID for the call rather than
+            % leaving it to spam the console on every save.
+            warnState = warning('off','MATLAB:print:ContentTypeImageSuggested');
+            cleanupWarn = onCleanup(@() warning(warnState));
+            exportgraphics(obj.fig,filePath,'ContentType','vector');
+          else
+            exportgraphics(obj.fig,filePath,'ContentType','image','Resolution',obj.ExportResolution);
+          end
         case 'fig'
           % savefig(), not exportgraphics() - .fig is MATLAB's own editable
           % figure format, not a rendered image/vector export
@@ -1032,6 +1301,108 @@ classdef niceColorbar < handle
         titleLines = {char(obj.Title)};
       end
 
+      % TickLabelsAutoScale: auto-derive a power-of-10 exponent from the
+      % actual data range (like MATLAB's classic axis exponent behavior).
+      % Computed here (needed below for tick-label scaling too, and passed
+      % into setColorbarLevels/setCappedColorbarLevels so both agree); the
+      % "x10^n" annotation itself is built as its own standalone object
+      % further down (see obj.ExpLabelObj), entirely separate from
+      % Title/TitleLineObjs - it must never consume or renumber the user's
+      % own Title lines.
+      if obj.TickLabelsAutoScale
+        if obj.Capped
+          expN = autoScaleExponent(obj.CappedLimits);
+        else
+          expN = autoScaleExponent(clim(obj.ax));
+        end
+      else
+        expN = 0;
+      end
+
+      % A 3-D axes' own Z ruler autoscales in lockstep with the colorbar:
+      % same expN (derived from the colorbar's own limits above), reusing
+      % MATLAB's native NumericRuler Exponent/ExponentMode instead of
+      % hand-rolling tick-label text, since ZAxis already supports exactly
+      % this. Reverting to 'auto' when off (or when expN comes out 0) hands
+      % control back to MATLAB's own default exponent heuristic rather than
+      % leaving it pinned at whatever manual value was last set.
+      if isAxes3D(obj.ax)
+        if obj.TickLabelsAutoScale && expN ~= 0
+          obj.ax.ZAxis.Exponent = expN;
+          % keep the Z tick labels' own decimal count in lockstep with the
+          % colorbar's TickLabelsAutoScaleDecimals, same '%+.<n>f' format
+          % the colorbar itself uses (see setColorbarLevels) - otherwise
+          % the two rulers can disagree on how many digits they show even
+          % though they share the same exponent.
+          obj.ax.ZAxis.TickLabelFormat = sprintf('%%+.%df',obj.TickLabelsAutoScaleDecimals);
+          % SecondaryLabel is the ruler's actual "x10^n" text object. Its
+          % Position can't be nudged directly: writing it even once
+          % permanently disables MATLAB's own adaptive camera-tracking
+          % placement for that object (verified empirically - no amount of
+          % toggling ExponentMode/Visible/Exponent afterward restores it).
+          % So it's hidden and mirrored with a standalone text (ZExpLabelObj)
+          % instead, positioned from the native label's still-live Position
+          % each call.
+          nativeExpLabel = obj.ax.ZAxis.SecondaryLabel;
+          nativeExpLabel.FontSize = obj.ax.ZAxis.FontSize + 2; % same +2-over-labels
+                                                               % rule the colorbar's
+                                                               % own ExpLabelObj follows
+          % MATLAB stops updating a Text object's screen transform while
+          % it's hidden, so leaving Visible='off' from a previous call and
+          % reading Position in 'pixels' straight away returns a stale
+          % (badly wrong after any further rotation) value - flip it
+          % visible and force one render first to get an up-to-date read,
+          % then hide it again once basePos is captured. Kept in 'pixels'
+          % throughout (never converted back to 'data'), same as
+          % ExpLabelObj/Title lines elsewhere in this method: interactive
+          % rotation alone never re-runs applyProperties anyway (only an
+          % actual property change does - see onViewChanged/onSettleRefresh,
+          % which only re-run the cheap/accurate LAYOUT pass), so there is
+          % no live camera-tracking to gain from 'data' units here, only a
+          % fragile pixel<->data round-trip to lose - it produced wildly
+          % out-of-range positions in practice (verified: a stale 'data'
+          % conversion once read back as thousands of units outside the
+          % axes' actual data range).
+          nativeExpLabel.Visible = 'on';
+          drawnow;
+          nativeExpLabel.Units = 'pixels';
+          basePos = nativeExpLabel.Position;
+          nativeExpLabel.Visible = 'off';
+          nativeExpLabel.Units = 'data'; % restore native's own Units so nothing
+                                          % about it looks altered besides Visible
+          if isempty(obj.ZExpLabelObj) || ~isvalid(obj.ZExpLabelObj)
+            obj.ZExpLabelObj = text(obj.ax,0,0,0,'','Units','pixels', ...
+              'XLimInclude','off','YLimInclude','off','ZLimInclude','off');
+          end
+          obj.ZExpLabelObj.Units = 'pixels';
+          obj.ZExpLabelObj.String = nativeExpLabel.String;
+          obj.ZExpLabelObj.Interpreter = nativeExpLabel.Interpreter;
+          obj.ZExpLabelObj.FontName = nativeExpLabel.FontName;
+          obj.ZExpLabelObj.FontSize = nativeExpLabel.FontSize;
+          obj.ZExpLabelObj.FontWeight = nativeExpLabel.FontWeight;
+          obj.ZExpLabelObj.Color = nativeExpLabel.Color;
+          obj.ZExpLabelObj.HorizontalAlignment = nativeExpLabel.HorizontalAlignment;
+          obj.ZExpLabelObj.VerticalAlignment = nativeExpLabel.VerticalAlignment;
+          obj.ZExpLabelObj.Position = basePos + [0 0 0]; % use middle position of the square 
+                                                         % bracket to move up/down the exponent 
+                                                         % of the Z-axis (coordinates in
+                                                         % the square bracket is in the
+                                                         % pixel coordinate system, which
+                                                         % is a 2D system (third entry is
+                                                         % ignored)
+        else
+          obj.ax.ZAxis.ExponentMode = 'auto';
+          obj.ax.ZAxis.TickLabelFormat = '%g';
+          if ~isempty(obj.ax.ZAxis.SecondaryLabel)
+            obj.ax.ZAxis.SecondaryLabel.Visible = 'on';
+          end
+          if ~isempty(obj.ZExpLabelObj) && isvalid(obj.ZExpLabelObj)
+            delete(obj.ZExpLabelObj);
+            obj.ZExpLabelObj = [];
+          end
+        end
+      end
+
       % Every line always renders as its own standalone text object
       % parented to obj.ax (never through the colorbar's native Title),
       % regardless of whether TitleColor is per-line (a cell) or a single
@@ -1137,6 +1508,47 @@ classdef niceColorbar < handle
         obj.ylb = [];
       end
 
+      %% create / update / remove the TickLabelsAutoScale "x10^n" annotation
+      % Standalone object, same construction pattern as the Logo (obj.ylb)
+      % above - deliberately NOT one of TitleLineObjs, so it never consumes
+      % or renumbers the user's own Title lines/TitleColor entries; always
+      % theme-follows regardless of TitleColor. Positioned in
+      % updateColorbarLayout right above the Title stack (see there).
+      if expN ~= 0
+        switch obj.TitleInterpreter
+          case "latex"
+            expStr = sprintf('$\\times10^{%d}$', expN);
+          case "tex"
+            expStr = sprintf('\\times10^{%d}', expN);
+          otherwise
+            expStr = sprintf('x10^%d', expN);
+        end
+        if isempty(obj.ExpLabelObj) || ~isvalid(obj.ExpLabelObj)
+          if use3DOverlay
+            obj.ExpLabelObj = annotation(obj.fig,'textbox',[0 0 0.01 0.01],'Units','pixels', ...
+                'EdgeColor','none','LineStyle','none','FitBoxToText','on','Margin',0);
+          else
+            obj.ExpLabelObj = text(obj.ax,0,0,'','Units','pixels');
+            obj.ExpLabelObj.XLimInclude = 'off';
+            obj.ExpLabelObj.YLimInclude = 'off';
+            obj.ExpLabelObj.ZLimInclude = 'off';
+          end
+        end
+        obj.ExpLabelObj.String = expStr;
+        obj.ExpLabelObj.Interpreter = obj.TitleInterpreter;
+        % follows the tick labels' own font (it's conceptually part of the
+        % tick-label column, not the Title), a couple points larger so it
+        % still reads as a small header above them rather than blending in
+        obj.ExpLabelObj.FontName = obj.TickLabelsFontName;
+        obj.ExpLabelObj.FontSize = obj.TickLabelsFontSize + 2;
+        obj.ExpLabelObj.FontWeight = 'normal';
+        obj.ExpLabelObj.Color = obj.ThemeFontColor;
+      elseif ~isempty(obj.ExpLabelObj) && isvalid(obj.ExpLabelObj)
+        % TickLabelsAutoScale is off, or n came out 0 - remove the leftover label
+        delete(obj.ExpLabelObj);
+        obj.ExpLabelObj = [];
+      end
+
       if use3DOverlay
         % updateColorbarLayout (called right after this) reads back each
         % annotation textbox's FitBoxToText-fitted [w h] to place it - that
@@ -1157,9 +1569,19 @@ classdef niceColorbar < handle
 
       %% colormap generation and tick-label formatting
       if obj.Capped
-        obj.setCappedColorbarLevels(hideTicksAndBox);
+        obj.setCappedColorbarLevels(hideTicksAndBox,expN);
       else
-        obj.setColorbarLevels(hideTicksAndBox);
+        obj.setColorbarLevels(hideTicksAndBox,expN);
+      end
+
+      % cache the tick-label extent once here (obj.clb.TickLabels just got
+      % populated above) rather than in updateColorbarLayout, which also
+      % runs on every plain-resize tick (onResize) - measuring via a
+      % throwaway text object on every such tick would reintroduce exactly
+      % the per-tick lag the rest of this class works to avoid
+      if expN ~= 0
+        [w,h] = obj.measureTickLabelExtent();
+        obj.TickLabelExtent = [w,h];
       end
 
       %% pixel layout; iterate a few times to let it settle against
@@ -1196,6 +1618,72 @@ classdef niceColorbar < handle
       if ~isempty(obj.ylb) && isvalid(obj.ylb)
         obj.ylb.Visible = obj.LogoVisible;
       end
+      if ~isempty(obj.ExpLabelObj) && isvalid(obj.ExpLabelObj)
+        % the auto exponent annotation describes the colorbar's own tick
+        % scale, not the Title text, so it follows ColorbarVisible (hide
+        % only when the colorbar itself is hidden) rather than TitleVisible
+        obj.ExpLabelObj.Visible = obj.ColorbarVisible;
+      end
+    end
+
+    function pollForMissedResize(obj)
+      % Called once a second, for every still-registered instance, from
+      % the single shared sharedPollTimer (see colorbar()/resizeHub) -
+      % NOT from a per-instance timer. Cheaply compares obj.fig's current
+      % pixel Position against the last-seen value and, only on an actual
+      % difference, runs onResize() exactly as if SizeChangedFcn itself
+      % had fired - this exists specifically because it sometimes doesn't
+      % (see colorbar()'s comment on this).
+      if ~obj.Built || isempty(obj.fig) || ~isvalid(obj.fig) || isempty(obj.clb) || ~isvalid(obj.clb) ...
+          || isempty(obj.ax) || ~isvalid(obj.ax)
+        return;
+      end
+      figUnits = obj.fig.Units;
+      obj.fig.Units = 'pixels';
+      curFigPos = obj.fig.Position;
+      obj.fig.Units = figUnits;
+      % NOTE: an earlier version of this method also unconditionally forced
+      % a repaint nudge here once a second regardless of whether anything
+      % changed, as a fallback for container changes (e.g. dragging a whole
+      % docked figure group into the Editor's document tab strip) that
+      % don't touch obj.fig.Position at all. That was reverted: applying it
+      % live produced worse corruption than the bug it was meant to fix
+      % (stray leftover Title/Logo/annotation fragments floating
+      % mid-canvas on one figure, a squished axes on another) -
+      % continuously perturbing clb.Position on every instance, every
+      % second, indefinitely, with nothing having actually changed,
+      % evidently confuses MATLAB's own docked-tab layout/compositing
+      % engine rather than fixing it.
+      %
+      % obj.ax's own pixel Position is tracked separately from
+      % obj.fig.Position because they can drift independently: docking a
+      % whole floating figure group into the Editor's document tab strip
+      % doesn't change any figure's Position, but a BACKGROUND (not
+      % currently the active/selected) docked tab can sit for a while
+      % with a stale, not-yet-laid-out obj.ax pixel Position - confirmed
+      % live (struct(obj) inspection) on a docked group where 1 of 12
+      % niceColorbar instances kept rendering its Title ~87px off after
+      % docking, while the other 11 (whichever tab happened to be active
+      % at the moment docking settled) came out correct. MATLAB seems to
+      % defer laying out a backgrounded tab's contents until it's
+      % actually selected, so obj.ax's pixel Position can still change
+      % well after obj.fig.Position - and this instance's own
+      % SettleTimer poll-until-quiescent already finished by then,
+      % reading two consecutive identical (but not yet final) values.
+      % Polling ax.Position here too (unlike the reverted unconditional
+      % nudge, this only acts on an ACTUAL detected change) catches that
+      % once MATLAB finally lays the tab out, self-healing within ~1s.
+      axUnits = obj.ax.Units;
+      obj.ax.Units = 'pixels';
+      curAxPos = obj.ax.Position;
+      obj.ax.Units = axUnits;
+      figChanged = isempty(obj.LastKnownFigPos) || ~isequal(curFigPos,obj.LastKnownFigPos);
+      axChanged = isempty(obj.LastKnownAxPos) || ~isequal(curAxPos,obj.LastKnownAxPos);
+      if figChanged || axChanged
+        obj.LastKnownFigPos = curFigPos;
+        obj.LastKnownAxPos = curAxPos;
+        obj.onResize();
+      end
     end
 
     function onResize(obj)
@@ -1207,10 +1695,26 @@ classdef niceColorbar < handle
       % applyProperties() whenever Style (or anything else) changes, so
       % this always reflects the current style even though it's not
       % recomputed here.
+      %
+      % Also schedules a deferred settle pass (see scheduleSettleRefresh):
+      % a single large, instantaneous resize (e.g. maximizing then
+      % restoring a docked figure - reported as the colorbar "jumping" far
+      % from its correct position) can fire this callback while
+      % getPlotboxPixels(obj.ax)'s pixel-unit conversion still reflects the
+      % figure's prior size - a graphics-pipeline lag confirmed empirically
+      % (immediately reading positions afterward sometimes returned a
+      % pixel frame scaled to the OLD, much larger figure; the same
+      % sequence sometimes settled correctly on the first callback too -
+      % timing-dependent, not deterministic). A normal interactive drag
+      % never shows this because it fires many intermediate SizeChangedFcn
+      % events that each self-correct the next; a single maximize/restore
+      % click does not get that natural follow-up, so one is scheduled
+      % here explicitly.
       if ~obj.Built || isempty(obj.clb) || ~isvalid(obj.clb)
         return;
       end
       obj.updateColorbarLayout(obj.ResizeLayout,false);
+      obj.scheduleSettleRefresh();
     end
 
     function onViewChanged(obj)
@@ -1220,8 +1724,8 @@ classdef niceColorbar < handle
       % immediately (same one onResize uses - no getframe(), ~1ms scale,
       % measured) so the bar keeps roughly following along without
       % stuttering the drag, then separately schedules the accurate,
-      % live-measured pass (see scheduleAccurateRotateRefresh) to correct
-      % it once rotation settles.
+      % live-measured pass (see scheduleSettleRefresh) to correct it once
+      % rotation settles.
       %
       % Running the accurate pass synchronously on every single View event
       % instead was tried and measured at ~0.26s each - fine for one
@@ -1239,56 +1743,168 @@ classdef niceColorbar < handle
         return;
       end
       obj.updateColorbarLayout(obj.ResizeLayout,false);
-      obj.scheduleAccurateRotateRefresh();
+      obj.scheduleSettleRefresh();
     end
 
-    function scheduleAccurateRotateRefresh(obj)
+    function scheduleSettleRefresh(obj)
       % Reuses one lazily-created timer object for this instance's entire
       % lifetime (stop+restart on every call, never deleted-and-recreated)
-      % rather than constructing a new one per rotation: an earlier version
+      % rather than constructing a new one per event: an earlier version
       % did the latter and was suspected (though never conclusively proven
-      % - see onAccurateRotateRefresh) of leaving MATLAB's timer subsystem
-      % in a state where new timers stopped firing reliably under heavy
-      % load. Reusing the same object was verified, in isolation, to
-      % survive 20 rapid stop/restart cycles and still fire correctly.
-      if isempty(obj.RotateSettleTimer) || ~isvalid(obj.RotateSettleTimer)
-        obj.RotateSettleTimer = timer('ExecutionMode','singleShot','StartDelay',0.35, ...
-          'TimerFcn',@(~,~) obj.onAccurateRotateRefresh());
-      elseif strcmp(obj.RotateSettleTimer.Running,'on')
-        stop(obj.RotateSettleTimer);
+      % - see onSettleRefresh) of leaving MATLAB's timer subsystem in a
+      % state where new timers stopped firing reliably under heavy load.
+      % Reusing the same object was verified, in isolation, to survive 20
+      % rapid stop/restart cycles and still fire correctly. Shared by both
+      % onResize (settles a stale post-maximize/restore pixel-frame read)
+      % and onViewChanged (settles a stale 3-D gap fraction after rotation).
+      %
+      % Resets the poll-tracking state (see onSettleRefresh) and the timer's
+      % delay back to the initial 0.35s: this is called for every new
+      % resize/View event, including ones that arrive mid-poll (e.g. a
+      % second maximize/restore before the first one finished settling), so
+      % the stability check must restart from scratch rather than comparing
+      % against a marker from a burst that's no longer relevant.
+      obj.SettlePollMarker = [];
+      obj.SettlePollCount = 0;
+      if isempty(obj.SettleTimer) || ~isvalid(obj.SettleTimer)
+        obj.SettleTimer = timer('ExecutionMode','singleShot','StartDelay',0.35, ...
+          'TimerFcn',@(~,~) obj.onSettleRefresh());
+      else
+        if strcmp(obj.SettleTimer.Running,'on')
+          stop(obj.SettleTimer);
+        end
+        obj.SettleTimer.StartDelay = 0.35;
       end
-      start(obj.RotateSettleTimer);
+      start(obj.SettleTimer);
     end
 
-    function cancelAccurateRotateRefresh(obj)
+    function cancelSettleRefresh(obj)
       % ObjectBeingDestroyed callback (see colorbar()) - stops and deletes
       % this instance's settle timer when its axes closes, rather than
-      % leaving it (and its captured reference to obj) dangling.
-      if ~isempty(obj.RotateSettleTimer) && isvalid(obj.RotateSettleTimer)
-        stop(obj.RotateSettleTimer);
-        delete(obj.RotateSettleTimer);
+      % leaving it (and its captured reference to obj) dangling. The
+      % once-a-second resize poll is no longer a per-instance timer (see
+      % sharedPollTimer) so there's nothing else to stop here: the shared
+      % timer re-derives its instance list fresh from resizeHub on every
+      % tick, which already drops obj once it's no longer valid/registered.
+      if ~isempty(obj.SettleTimer) && isvalid(obj.SettleTimer)
+        stop(obj.SettleTimer);
+        delete(obj.SettleTimer);
       end
-      obj.RotateSettleTimer = [];
+      obj.SettleTimer = [];
+      obj.SettlePollMarker = [];
+      obj.SettlePollCount = 0;
     end
 
-    function onAccurateRotateRefresh(obj)
-      % Fires once, ~0.35s after the last View change (see
-      % scheduleAccurateRotateRefresh) - i.e. once per completed
-      % interactive-rotate drag, not on every intermediate frame, so unlike
-      % onViewChanged's cheap pass, this can afford the live-measured one:
-      % a rotation can substantially change the 3-D content's projected
-      % shape, and Side='top' in particular relies on live-measuring that
-      % shape (see updateColorbarLayout) to stay clear of it, especially at
-      % near-edge-on elevation where the cheap pass's reused gap fraction
-      % can be badly wrong. Guarded the same way onResize/refresh are
-      % against a figure/colorbar closed out from under the timer while it
-      % was pending. Does not delete/clear obj.RotateSettleTimer here -
-      % see scheduleAccurateRotateRefresh, it's reused for the next
-      % rotation.
+    function onSettleRefresh(obj)
+      % Fires ~0.35s after the last resize or View change (see
+      % scheduleSettleRefresh), then keeps polling obj.ax's pixel Position
+      % every 0.05s until it reads IDENTICAL on two consecutive checks
+      % (or a generous cap of retries is hit) before finally taking one
+      % accurate, live-measured layout pass - rather than trusting a single
+      % fixed-delay check.
+      %
+      % A single fixed-delay check was tried first and found insufficient:
+      % after maximizing then restoring a DOCKED figure's container (one
+      % big, instantaneous resize, reported as the colorbar ending up in a
+      % wildly wrong position - e.g. hundreds of pixels outside the actual
+      % figure), obj.ax's pixel-unit conversion was confirmed, via direct
+      % inspection in a live session, to sometimes still be reading a
+      % STALE (pre-resize) value even a full 2+ seconds after the resize -
+      % a graphics-pipeline lag whose duration isn't fixed or predictable
+      % (a plain interactive drag never shows it, since its many
+      % intermediate SizeChangedFcn events each naturally self-correct the
+      % next one; only a single instantaneous jump lacks that follow-up).
+      % Waiting for two consecutive identical reads is a direct test of
+      % "has the pipeline actually caught up", independent of how long that
+      % takes for any given jump size/monitor configuration.
+      %
+      % For rotation (unaffected by this lag - obj.ax's pixel Position
+      % doesn't depend on View at all), the very first two polls already
+      % match, so this still commits promptly (well within the ~0.6s window
+      % the rotation-settle tests wait for), just one 0.05s poll interval
+      % later than the old single-check version.
       if ~obj.Built || isempty(obj.clb) || ~isvalid(obj.clb)
+        obj.SettlePollMarker = [];
+        obj.SettlePollCount = 0;
         return;
       end
+      oldUnits = obj.ax.Units;
+      obj.ax.Units = 'pixels';
+      curMarker = obj.ax.Position;
+      obj.ax.Units = oldUnits;
+      maxPolls = 100; % 0.35s initial + up to 100*0.05s = ~5.35s total cap - well
+                     % beyond the worst observed docked maximize/restore lag,
+                     % bounded so a pathological case can't poll forever. The
+                     % short 0.05s interval keeps the common (already-stable)
+                     % case - e.g. rotation, where obj.ax's pixel Position
+                     % never depends on View at all - committing at ~0.4s,
+                     % comfortably inside the ~0.6s window the rotation-
+                     % settle tests wait for.
+      stable = ~isempty(obj.SettlePollMarker) && isequal(curMarker,obj.SettlePollMarker);
+      if ~stable && obj.SettlePollCount < maxPolls
+        obj.SettlePollMarker = curMarker;
+        obj.SettlePollCount = obj.SettlePollCount + 1;
+        % obj.SettleTimer is still reported Running=='on' for the ENTIRE
+        % duration of its own TimerFcn (confirmed empirically - true for
+        % the whole callback body, not just after it returns), so it can't
+        % be reconfigured/restarted from inside here (MATLAB errors:
+        % "StartDelay cannot be set while Timer is running" /
+        % "Cannot start timer because it is already running" - discovered
+        % the hard way, as a silently-swallowed timer-callback error that
+        % left every poll permanently stuck at count 1). Use a short-lived,
+        % self-deleting one-off timer instead just for this retry tick;
+        % obj.SettleTimer itself is only ever touched from
+        % scheduleSettleRefresh, which always runs outside of its own
+        % callback.
+        retryTimer = timer('ExecutionMode','singleShot','StartDelay',0.05, ...
+          'TimerFcn',@(~,~) obj.onSettleRefresh(),'StopFcn',@(src,~) delete(src));
+        start(retryTimer);
+        return;
+      end
+      obj.SettlePollMarker = [];
+      obj.SettlePollCount = 0;
       obj.updateColorbarLayout(obj.ResizeLayout,true);
+      % Setting obj.clb.Position above doesn't always get repainted on
+      % screen - confirmed empirically with several docked figures sharing
+      % one tabbed container: after a toolstrip maximize on the active tab,
+      % clb.Position/Visible/Colormap all read back exactly correct (pixel-
+      % verified via getframe()), yet the bar itself stayed blank
+      % (background-colored) on screen. Toggling Visible off/on did NOT
+      % force a repaint either - only an actual Position VALUE change did.
+      % Nudging it by a throwaway pixel and back forces MATLAB to flush that
+      % one graphics object rather than trusting the earlier property write
+      % to have been painted.
+      % Uses 'limitrate' rather than a plain drawnow: with several
+      % niceColorbar instances (one per docked figure) settling at roughly
+      % the same moment - e.g. every tab in a docked group reacting to one
+      % dock/undock action together - a plain drawnow from each instance
+      % forces its own full, synchronous flush of every open figure, and
+      % those flushes stack up into the multi-second "MATLAB Busy" freeze
+      % this was confirmed to cause with 8 docked figures. 'limitrate' still
+      % delivers the repaint this nudge exists for, but lets MATLAB coalesce
+      % near-simultaneous requests from multiple instances into far fewer
+      % actual paints instead of one forced flush per instance.
+      obj.forceColorbarRepaint();
+    end
+
+    function forceColorbarRepaint(obj)
+      % Nudges obj.clb.Position by a throwaway pixel and back, forcing
+      % MATLAB to actually flush a repaint of this colorbar rather than
+      % trusting an earlier property write to have been painted (see
+      % onSettleRefresh's comment above for the empirical evidence this is
+      % needed, and why 'limitrate' rather than a plain drawnow). Shared by
+      % onSettleRefresh (after a resize/rotation settles) and
+      % pollForMissedResize's periodic fallback (for container changes -
+      % e.g. dragging a whole docked figure group into the Editor's
+      % document tab strip - that leave obj.fig.Position unchanged, so
+      % nothing else here ever detects them).
+      if ~isempty(obj.clb) && isvalid(obj.clb)
+        clbPos = obj.clb.Position;
+        obj.clb.Position = clbPos + [0 0 0 1];
+        drawnow limitrate;
+        obj.clb.Position = clbPos;
+        drawnow limitrate;
+      end
     end
 
     function updateColorbarLayout(obj,layout,allowLiveMeasure)
@@ -1438,6 +2054,11 @@ classdef niceColorbar < handle
                 ylbWasVisible = obj.ylb.Visible;
                 obj.ylb.Visible = 'off';
               end
+              expLblWasVisible = [];
+              if ~isempty(obj.ExpLabelObj) && isvalid(obj.ExpLabelObj)
+                expLblWasVisible = obj.ExpLabelObj.Visible;
+                obj.ExpLabelObj.Visible = 'off';
+              end
               drawnow;
               figUnitsM = obj.fig.Units;
               obj.fig.Units = 'pixels';
@@ -1473,6 +2094,9 @@ classdef niceColorbar < handle
               end
               if ~isempty(ylbWasVisible)
                 obj.ylb.Visible = ylbWasVisible;
+              end
+              if ~isempty(expLblWasVisible)
+                obj.ExpLabelObj.Visible = expLblWasVisible;
               end
               gapNeeded = max(20, measuredTop - baselineTop + 20); % +20px safety margin
               if axPos(4) > 0
@@ -1554,10 +2178,12 @@ classdef niceColorbar < handle
       % below) - so the Title/Logo text itself is always read horizontally
       % regardless of Side.
       if isHorizontalSide
-        % Anchor 18px beyond each end of the bar along its own length: Title
-        % right-aligned at the left end (grows further left), Logo
-        % left-aligned at the right end (grows further right). Both are
-        % vertically centered on the bar's own thickness.
+        % Anchor 18px beyond each end of the bar along its own length: Logo
+        % right-aligned at the left end (grows further left), Title
+        % left-aligned at the right end (grows further right) - so Title
+        % sits on the high-value end of the tick labels rather than the
+        % low-value end, per user feedback. Both are vertically centered on
+        % the bar's own thickness.
         pixelLeftEdge  = -18;
         pixelRightEdge = obj.clb.Position(3) + 18;
         vCenter = obj.clb.Position(2) + layout.pixelWidth/2;
@@ -1569,22 +2195,67 @@ classdef niceColorbar < handle
           % the full textbox-Position/FitBoxToText reasoning).
           leftXAbs = obj.clb.Position(1) + pixelLeftEdge;
           rightXAbs = obj.clb.Position(1) + pixelRightEdge;
+          % Exponent-only offset of 40 px to move it further right than the
+          % Title lines; kept separate from rightXAbs so it doesn't also
+          % drag the Title text (rightXAbs anchors both - see below).
+          rightXAbsExp = rightXAbs + 40;
           totalH = 0;
           for i = 1:numel(obj.TitleLineObjs)
             totalH = totalH + obj.TitleLineObjs{i}.Position(4);
           end
           currentYAbs = vCenter + totalH/2; % top of the stacked block, centered on the bar
-          for i = numel(obj.TitleLineObjs):-1:1
+          % stack top-down so TitleLineObjs{1} ends up on top, matching the
+          % 2-D horizontal branch and how a native multi-line Title would
+          % order the same cell array (was numel:-1:1, which put the LAST
+          % line on top instead - reported as reversed row order vs. the
+          % 2-D plots)
+          for i = 1:numel(obj.TitleLineObjs)
             h = obj.TitleLineObjs{i};
-            h.HorizontalAlignment = 'right';
+            h.HorizontalAlignment = 'left';
             w = h.Position(3); ht = h.Position(4);
             currentYAbs = currentYAbs - ht;
-            h.Position = [leftXAbs - w, currentYAbs, w, ht];
+            h.Position = [rightXAbs, currentYAbs, w, ht];
+          end
+          if ~isempty(obj.ExpLabelObj) && isvalid(obj.ExpLabelObj)
+            % anchored to the bar's own far (outward) end, same end as
+            % Title (now the right end - see this method's Title/Logo
+            % swap above) - mirrored vertically between 'top' (ticks north
+            % of the bar - exponent clears their full height, sitting
+            % above them) and 'bottom' (ticks south of the bar - exponent
+            % mirrors that, sitting below them) - see the 2D branch below
+            % for why the un-mirrored version was wrong for 'bottom'.
+            wExp = obj.ExpLabelObj.Position(3); htExp = obj.ExpLabelObj.Position(4);
+            % A 3-D horizontal bar packs a fixed capped-mode tick count (see
+            % setCappedColorbarLevels) into whatever width layout.scale
+            % happens to give it, and MATLAB auto-rotates the tick labels
+            % (diagonally) once they'd otherwise overlap each other - a
+            % rotated label's true rendered footprint is taller than its
+            % own un-rotated text height (obj.TickLabelExtent(2), what this
+            % clearance was originally based on), so that height alone
+            % undershoots and lets this box collide with the now-diagonal
+            % labels. Using the label's full WIDTH as the clearance instead
+            % is a conservative upper bound that clears any rotation angle
+            % up to 90 degrees, confirmed against a live capped-limits 3-D
+            % repro that showed the collision.
+            tickLabelClearance = obj.TickLabelExtent(1) + 6;
+            obj.ExpLabelObj.HorizontalAlignment = 'right';
+            if obj.Side == "top"
+              % Added offset of -5 px (top colorbar) to move the exponent on the 
+              % top colorbar in the vertical direction
+              yExp = obj.clb.Position(2) + layout.pixelWidth + tickLabelClearance - 5;
+            else
+              % Added offset of +5 px (bottom colorbar) to move the exponent on the 
+              % bottom colorbar in the vertical direction            
+              yExp = obj.clb.Position(2) - tickLabelClearance - htExp + 5;
+            end
+            % This controls the position of the exponential label for the top/bottom 
+            % colorbar in the 3D case
+            obj.ExpLabelObj.Position = [rightXAbsExp - wExp, yExp, wExp, htExp];
           end
           if ~isempty(obj.ylb) && isvalid(obj.ylb)
-            obj.ylb.HorizontalAlignment = 'left';
+            obj.ylb.HorizontalAlignment = 'right';
             w = obj.ylb.Position(3); ht = obj.ylb.Position(4);
-            obj.ylb.Position = [rightXAbs, vCenter - ht/2, w, ht];
+            obj.ylb.Position = [leftXAbs - w, vCenter - ht/2, w, ht];
           end
           return;
         end
@@ -1605,17 +2276,43 @@ classdef niceColorbar < handle
         for i = 1:numel(obj.TitleLineObjs)
           h = obj.TitleLineObjs{i};
           h.Units = 'pixels';
-          h.HorizontalAlignment = 'right';
+          h.HorizontalAlignment = 'left';
           h.VerticalAlignment = 'top';
-          h.Position(1) = leftX;
+          h.Position(1) = rightX;
           h.Position(2) = currentY;
           currentY = currentY - h.Extent(4); % next line stacks below this one's rendered height
         end
+        if ~isempty(obj.ExpLabelObj) && isvalid(obj.ExpLabelObj)
+          % anchored to the bar's own far (outward) end, same end as
+          % Title (now the right end - see this method's Title/Logo swap
+          % above) - mirrored vertically
+          % between 'top' (ticks north of the bar - exponent clears their
+          % full height, sitting above them, growing upward) and 'bottom'
+          % (ticks south of the bar - exponent mirrors that, sitting below
+          % them, growing downward). Using the same "grow upward, clear
+          % above" logic for 'bottom' left the exponent sandwiched between
+          % the axes and the bar (its innermost, axes-facing side) instead
+          % of on the bar's outward-facing side like every other Side value.
+          tickLabelClearance = obj.TickLabelExtent(2) + 6;
+          obj.ExpLabelObj.Units = 'pixels';
+          obj.ExpLabelObj.HorizontalAlignment = 'right';
+          if obj.Side == "top"
+            obj.ExpLabelObj.VerticalAlignment = 'bottom';
+            yExp = obj.clb.Position(2) + layout.pixelWidth + tickLabelClearance;
+          else
+            obj.ExpLabelObj.VerticalAlignment = 'top';
+            yExp = obj.clb.Position(2) - tickLabelClearance;
+          end
+          % nudged 30px right from the bar-aligned default, per user
+          % cosmetic tuning against a live screenshot (Side='top')
+          obj.ExpLabelObj.Position(1) = rightX + 30;
+          obj.ExpLabelObj.Position(2) = yExp - axPos(2);
+        end
         if ~isempty(obj.ylb) && isvalid(obj.ylb)
           obj.ylb.Units = 'pixels';
-          obj.ylb.HorizontalAlignment = 'left';
+          obj.ylb.HorizontalAlignment = 'right';
           obj.ylb.VerticalAlignment = 'middle';
-          obj.ylb.Position(1) = rightX;
+          obj.ylb.Position(1) = leftX;
           obj.ylb.Position(2) = vCenterAx;
         end
         return;
@@ -1670,6 +2367,37 @@ classdef niceColorbar < handle
           h.Position = [x, currentYAbs, w, ht];
           currentYAbs = currentYAbs + ht;
         end
+        if ~isempty(obj.ExpLabelObj) && isvalid(obj.ExpLabelObj)
+          wExp = obj.ExpLabelObj.Position(3); htExp = obj.ExpLabelObj.Position(4);
+          expGap = 8;
+          if ~isempty(obj.TitleLineObjs)
+            % sits on the same row as Title's own last line - TitleLineObjs{end}
+            % is the bottom-most one (closest to the bar; see the stacking
+            % loop above), immediately following it with a small gap
+            lastTitle = obj.TitleLineObjs{end};
+            yExp = lastTitle.Position(2);
+            if obj.Side == "left"
+              % Added +15px to move the exponent on the left colorbar to the right
+              xExp = lastTitle.Position(1) - expGap - wExp + 15;
+            else
+              xExp = lastTitle.Position(1) + lastTitle.Position(3) + expGap;
+            end
+          else
+            % no Title at all - fall back to the tick-label column's own
+            % outer edge, right above the bar's top edge
+            tickLabelW = obj.TickLabelExtent(1) + 6; % +6px: colorbar's own bar-to-label gap
+            yExp = obj.clb.Position(2) + obj.clb.Position(4) + obj.TickLabelExtent(2)/2 + 4;
+            if obj.Side == "left"
+              % Added +15px to move the exponent on the left colorbar to the right
+              xExp = obj.clb.Position(1) - tickLabelW - wExp + 15;
+            else
+              % Added +0px to move the exponent on the right colorbar to the left
+              xExp = obj.clb.Position(1) + layout.pixelWidth + tickLabelW;
+            end
+          end
+          obj.ExpLabelObj.HorizontalAlignment = 'left';
+          obj.ExpLabelObj.Position = [xExp, yExp, wExp, htExp];
+        end
         if ~isempty(obj.ylb) && isvalid(obj.ylb)
           obj.ylb.HorizontalAlignment = titleAlign; % see TitleLineObjs loop above for why this is needed
           w = obj.ylb.Position(3); ht = obj.ylb.Position(4);
@@ -1703,6 +2431,53 @@ classdef niceColorbar < handle
         h.Position(2) = currentY;
         currentY = currentY + h.Extent(4); % next line stacks above this one's rendered height
       end
+      if ~isempty(obj.ExpLabelObj) && isvalid(obj.ExpLabelObj)
+        expGap = 8;
+        if ~isempty(obj.TitleLineObjs)
+          % sits on the same row as Title's own last line - TitleLineObjs{end}
+          % is the bottom-most one (closest to the bar; see the stacking loop
+          % above), immediately following it with a small gap
+          lastTitle = obj.TitleLineObjs{end};
+          rowY = lastTitle.Position(2);
+          if obj.Side == "left"
+            expAlign = 'right';
+            xTarget = lastTitle.Position(1) - lastTitle.Extent(3) - expGap;
+          else
+            expAlign = 'left';
+            xTarget = lastTitle.Position(1) + lastTitle.Extent(3) + expGap;
+          end
+        else
+          % no Title at all - fall back to the tick-label column's own
+          % outer edge, right above the bar's top edge
+          tickLabelW = obj.TickLabelExtent(1) + 6; % +6px: colorbar's own bar-to-label gap
+          rowY = (obj.clb.Position(2) + obj.clb.Position(4) + obj.TickLabelExtent(2)/2 + 4) - axPos(2);
+          if obj.Side == "left"
+            expAlign = 'left';
+            xTarget = obj.clb.Position(1) - tickLabelW - axPos(1);
+          else
+            expAlign = 'right';
+            xTarget = obj.clb.Position(1) + layout.pixelWidth + tickLabelW - axPos(1);
+          end
+        end
+        obj.ExpLabelObj.Units = 'pixels';
+        obj.ExpLabelObj.HorizontalAlignment = expAlign;
+        obj.ExpLabelObj.VerticalAlignment = 'bottom';
+        % nudged 25px outward (away from the bar) / 10px down from the
+        % bar-aligned default, per user cosmetic tuning against a live
+        % screenshot - mirrored by Side so it moves AWAY from the title on
+        % both sides: for 'right', xTarget already sits to the right of
+        % Title, so +25 pushes it further right/outward; for 'left',
+        % xTarget sits to the LEFT of Title, so the same +25 would instead
+        % push it back toward/into Title, which is exactly the overlap the
+        % un-mirrored version caused.
+        if obj.Side == "left"
+          horizNudge = -25;
+        else
+          horizNudge = 25;
+        end
+        obj.ExpLabelObj.Position(1) = xTarget + horizNudge;
+        obj.ExpLabelObj.Position(2) = rowY - 10;
+      end
 
       % ACCURATE PIXEL CENTERING OF LOGO BELOW THE COLORBAR OVER BOTH BAR AND TICK LABELS
       %
@@ -1721,8 +2496,36 @@ classdef niceColorbar < handle
         obj.ylb.VerticalAlignment = 'top';
       end
     end
+
+    function [w,h] = measureTickLabelExtent(obj)
+      % Pixel [width height] of the widest current tick label, used to
+      % anchor TickLabelsAutoScale's exponent annotation flush with the
+      % tick-label column/row's own outer edge - independent of wherever
+      % Title happens to be, since the annotation is conceptually part of
+      % the tick labels, not the Title. obj.clb.TickLabels already carries
+      % the '\color[rgb]{...}' tag injected by setColorbarLevels/
+      % setCappedColorbarLevels - stripped here so the probe measures only
+      % the visible text.
+      longest = '';
+      for i = 1:numel(obj.clb.TickLabels)
+        s = regexprep(obj.clb.TickLabels{i},'\\color\[rgb\]\{[^}]*\}','');
+        if numel(s) > numel(longest)
+          longest = s;
+        end
+      end
+      if isempty(longest)
+        w = 0; h = 0;
+        return
+      end
+      probe = text(obj.ax,0,0,longest,'Units','pixels','Visible','off', ...
+          'FontName',obj.TickLabelsFontName,'FontSize',obj.TickLabelsFontSize, ...
+          'FontWeight',obj.TickLabelsFontWeight);
+      w = probe.Extent(3);
+      h = probe.Extent(4);
+      delete(probe);
+    end
     %
-    function setColorbarLevels(obj,hideTicksAndBox)
+    function setColorbarLevels(obj,hideTicksAndBox,expN)
       nc = obj.NumColormapColors;
       if isempty(nc), nc = 8; end % default number of colors
       cmapName = obj.ColormapName;
@@ -1763,7 +2566,11 @@ classdef niceColorbar < handle
       %
       tickStep = (obj.clb.Limits(2)-obj.clb.Limits(1))/nc;
       set(obj.clb,'ylim',obj.clb.Limits,'ytick',(obj.clb.Limits(1):tickStep:obj.clb.Limits(2))');
-      L = cellfun(@(x)sprintf(obj.TickLabelsFormat,x),num2cell(get(obj.clb,'ytick')),'Un',0);
+      fmt = obj.TickLabelsFormat;
+      if obj.TickLabelsAutoScale
+        fmt = sprintf('%%+.%df',obj.TickLabelsAutoScaleDecimals);
+      end
+      L = cellfun(@(x)sprintf(fmt,x/10^expN),num2cell(get(obj.clb,'ytick')),'Un',0);
       set(obj.clb,'yticklabel',L);
 
       % remove TickLabels depending on the number of colors in the colorbar:
@@ -1795,7 +2602,7 @@ classdef niceColorbar < handle
       end
     end
 
-    function setCappedColorbarLevels(obj,hideTicksAndBox)
+    function setCappedColorbarLevels(obj,hideTicksAndBox,expN)
       % Capped-mode counterpart to setColorbarLevels(): instead of
       % stretching the gradient colormap over obj.CappedLimits, it appends
       % two fixed threshold colors (obj.CappedColorBelow/obj.CappedColorAbove)
@@ -1829,7 +2636,11 @@ classdef niceColorbar < handle
       %
       gradientTicks = linspace(minVal,maxVal,nc+1);
       customTicks = [cappedMin,gradientTicks,cappedMax];
-      L = cellfun(@(x)sprintf(obj.TickLabelsFormat,x),num2cell(customTicks),'Un',0);
+      fmt = obj.TickLabelsFormat;
+      if obj.TickLabelsAutoScale
+        fmt = sprintf('%%+.%df',obj.TickLabelsAutoScaleDecimals);
+      end
+      L = cellfun(@(x)sprintf(fmt,x/10^expN),num2cell(customTicks),'Un',0);
       % mark the boundary labels with '<'/'>', then blank the two outermost
       % (padding) ticks - they exist only to give the threshold colors a
       % sliver of CLim to render in, not to be labeled themselves
@@ -2073,6 +2884,18 @@ function step = getLabelStep(nc)
     step = 5;
   else
     step = 1;
+  end
+end
+
+function n = autoScaleExponent(limitsVal)
+  % power-of-10 exponent for TickLabelsAutoScale, derived purely from the
+  % magnitude of the data range - n=0 (values already order-1) means "no
+  % scaling needed", which callers use to suppress the annotation entirely
+  maxAbs = max(abs(limitsVal));
+  if maxAbs == 0 || ~isfinite(maxAbs)
+    n = 0;
+  else
+    n = floor(log10(maxAbs));
   end
 end
 

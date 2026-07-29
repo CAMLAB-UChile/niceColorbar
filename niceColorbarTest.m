@@ -127,12 +127,12 @@ classdef niceColorbarTest < matlab.unittest.TestCase
       axes(ax);
       nc = niceColorbar();
       nc.colorbar();
-      nc.Logo = ['\color[rgb]{0.360784 0.4 0.435294}THIS', ...
-                 '\color[rgb]{0.8000 0.2510 0.2235}LOGO'];
+      nc.Logo = ['\color[rgb]{0.360784,0.4,0.435294}THIS', ...
+                 '\color[rgb]{0.8000,0.2510,0.2235}LOGO'];
       logoObj = findobj(ax, 'Type', 'text');
       testCase.verifyClass(logoObj.String, 'char');
-      testCase.verifyEqual(logoObj.String, ['\color[rgb]{0.360784 0.4 0.435294}THIS', ...
-                                             '\color[rgb]{0.8000 0.2510 0.2235}LOGO']);
+      testCase.verifyEqual(logoObj.String, ['\color[rgb]{0.360784,0.4,0.435294}THIS', ...
+                                             '\color[rgb]{0.8000,0.2510,0.2235}LOGO']);
     end
 
     function testLogoBracketConcatenationWithStringsSplitsIntoTwoLines(testCase)
@@ -143,8 +143,8 @@ classdef niceColorbarTest < matlab.unittest.TestCase
       axes(ax);
       nc = niceColorbar();
       nc.colorbar();
-      nc.Logo = ["\color[rgb]{0.360784 0.4 0.435294}THIS", ...
-                 "\color[rgb]{0.8000 0.2510 0.2235}LOGO"];
+      nc.Logo = ["\color[rgb]{0.360784,0.4,0.435294}THIS", ...
+                 "\color[rgb]{0.8000,0.2510,0.2235}LOGO"];
       logoObj = findobj(ax, 'Type', 'text');
       testCase.verifyClass(logoObj.String, 'cell');
       testCase.verifyEqual(numel(logoObj.String), 2);
@@ -175,6 +175,85 @@ classdef niceColorbarTest < matlab.unittest.TestCase
       nc.colorbar();
       nc.TickLabelsFormat = '%.2f';
       testCase.verifyWarningFree(@() nc.setCappedLimits([-4 4]));
+    end
+
+    %% TickLabelsAutoScale: exponent is derived purely from the current
+    %% Limits/CappedLimits, not set by hand - these lock in both the
+    %% computed exponent value and that it's off by default. The "x10^n"
+    %% annotation is its own standalone object (obj.ExpLabelObj), entirely
+    %% separate from Title/TitleLineObjs, so it never consumes or renumbers
+    %% the user's own Title lines/TitleColor entries.
+    function testTickLabelsAutoScaleDefaultOffAddsNoExtraLine(testCase)
+      [~, ax] = testCase.createFigureWithAxes();
+      axes(ax);
+      nc = niceColorbar();
+      nc.colorbar();
+      nc.setLimits([-3e-3 4e-3]);
+      testCase.verifyEqual(numel(findobj(ax, 'Type', 'text')), 0);
+    end
+
+    function testTickLabelsAutoScaleComputesExpectedExponent(testCase)
+      [~, ax] = testCase.createFigureWithAxes();
+      axes(ax);
+      nc = niceColorbar();
+      nc.colorbar();
+      nc.setLimits([-3e-3 4e-3]); % matches the user's reference image: n=-3
+      nc.TickLabelsAutoScale = true;
+      expObj = findobj(ax, 'Type', 'text');
+      testCase.verifyEqual(numel(expObj), 1);
+      testCase.verifyEqual(expObj.String, '$\times10^{-3}$');
+    end
+
+    function testTickLabelsAutoScaleSuppressedWhenExponentIsZero(testCase)
+      [~, ax] = testCase.createFigureWithAxes();
+      axes(ax);
+      nc = niceColorbar();
+      nc.colorbar();
+      nc.setLimits([-3 4]); % max(abs) = 4 -> floor(log10(4)) = 0 -> no scaling
+      nc.TickLabelsAutoScale = true;
+      testCase.verifyEqual(numel(findobj(ax, 'Type', 'text')), 0);
+    end
+
+    function testTickLabelsAutoScaleAppliesUnderCappedLimits(testCase)
+      [fig, ax] = testCase.createFigureWithAxes();
+      axes(ax);
+      nc = niceColorbar();
+      nc.colorbar();
+      nc.TickLabelsAutoScale = true;
+      nc.TickLabelsFormat = '%.0f';
+      nc.setCappedLimits([-3e-3 4e-3]);
+      clbObj = findobj(fig, 'Type', 'colorbar');
+      testCase.verifyEqual(clbObj.TickLabels{1}, '');
+      testCase.verifyEqual(clbObj.TickLabels{end}, '');
+      testCase.verifyTrue(contains(clbObj.TickLabels{2}, '<'));
+      testCase.verifyTrue(contains(clbObj.TickLabels{end-1}, '>'));
+      expObj = findobj(ax, 'Type', 'text');
+      testCase.verifyEqual(numel(expObj), 1);
+      testCase.verifyEqual(expObj.String, '$\times10^{-3}$');
+    end
+
+    function testTickLabelsAutoScalePreservesPerLineTitleColorIndexing(testCase)
+      % the exponent annotation is a standalone object (not one of
+      % TitleLineObjs), so it must never disturb the user's own per-line
+      % TitleColor mapping - TitleColor{1}/{2} still map to the user's own
+      % two Title lines exactly as if TickLabelsAutoScale were off.
+      [~, ax] = testCase.createFigureWithAxes();
+      axes(ax);
+      nc = niceColorbar();
+      nc.colorbar();
+      nc.ThemeMode = 'light'; % force deterministic ThemeFontColor, independent of the environment's actual theme
+      nc.setLimits([-3e-3 4e-3]);
+      nc.Title = {'Line one', 'Line two'};
+      nc.TitleColor = {[0.8 0.2 0.2], [0.2 0.2 0.8]};
+      nc.TickLabelsAutoScale = true;
+      textObjs = findobj(ax, 'Type', 'text');
+      testCase.verifyEqual(numel(textObjs), 3);
+      expObj = findobj(ax, 'Type', 'text', 'String', '$\times10^{-3}$');
+      lineOneObj = findobj(ax, 'Type', 'text', 'String', 'Line one');
+      lineTwoObj = findobj(ax, 'Type', 'text', 'String', 'Line two');
+      testCase.verifyEqual(expObj.Color, [0 0 0]);
+      testCase.verifyEqual(lineOneObj.Color, [0.8 0.2 0.2]);
+      testCase.verifyEqual(lineTwoObj.Color, [0.2 0.2 0.8]);
     end
 
     %% property setter validation (checkAndAssign)
@@ -727,9 +806,12 @@ classdef niceColorbarTest < matlab.unittest.TestCase
       testCase.verifyGreaterThan(clbObj.Position(2), 0);
     end
 
-    function testSideBottomAnchorsTitleLeftOfBarGrowingOutward(testCase)
-      % For a horizontal bar, Title sits to the left (right-aligned,
-      % growing further left, away from the bar) instead of above it.
+    function testSideBottomAnchorsTitleRightOfBarGrowingOutward(testCase)
+      % For a horizontal bar, Title sits to the right (left-aligned,
+      % growing further right, away from the bar) instead of above it - the
+      % high-value end of the tick labels, not the low-value end (see
+      % testSideBottomAnchorsLogoLeftOfBarGrowingOutward for the Logo
+      % counterpart on the low-value end).
       [~, ax] = testCase.createFigureWithAxes();
       axes(ax);
       nc = niceColorbar();
@@ -737,12 +819,13 @@ classdef niceColorbarTest < matlab.unittest.TestCase
       nc.Title = {'A title'};
       nc.Side = 'bottom';
       titleObj = findobj(ax, 'Type', 'text');
-      testCase.verifyEqual(char(titleObj.HorizontalAlignment), 'right');
+      testCase.verifyEqual(char(titleObj.HorizontalAlignment), 'left');
     end
 
-    function testSideBottomAnchorsLogoRightOfBarGrowingOutward(testCase)
-      % For a horizontal bar, Logo sits to the right (left-aligned,
-      % growing further right, away from the bar) instead of below it.
+    function testSideBottomAnchorsLogoLeftOfBarGrowingOutward(testCase)
+      % For a horizontal bar, Logo sits to the left (right-aligned,
+      % growing further left, away from the bar) instead of below it - the
+      % low-value end of the tick labels, not the high-value end.
       [~, ax] = testCase.createFigureWithAxes();
       axes(ax);
       nc = niceColorbar();
@@ -750,7 +833,7 @@ classdef niceColorbarTest < matlab.unittest.TestCase
       nc.Logo = 'A logo';
       nc.Side = 'bottom';
       logoObj = findobj(ax, 'Type', 'text');
-      testCase.verifyEqual(char(logoObj.HorizontalAlignment), 'left');
+      testCase.verifyEqual(char(logoObj.HorizontalAlignment), 'right');
     end
 
     function testSideTopMovesColorbarAboveDefaultPosition(testCase)

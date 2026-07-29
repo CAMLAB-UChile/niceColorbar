@@ -81,6 +81,23 @@ ncSub2.Title = {'Subplot 2'};
 axes(ax2);
 ncSub2.colorbar();
 
+%% Autoscaled tick labels
+% |TickLabelsAutoScale| keeps |clim|/|Limits| in real data units, but
+% divides the tick labels by a common power of ten and auto-prepends a
+% "x10^n" annotation above the bar - useful when the data range sits far
+% from order-1. |TickLabelsAutoScaleDecimals| controls how many decimal
+% digits the scaled labels show (it overrides |TickLabelsFormat| while
+% autoscale is on). On a 3-D axes, the plot's own Z ruler is kept in
+% lockstep with the same exponent and decimal count.
+figure
+contourf(peaks*1e-3 + 5000);
+xlabel("x", "FontName", "Arial", "FontSize", 14);
+ylabel("y", "FontName", "Arial", "FontSize", 14);
+ncAuto = niceColorbar("ultra", "parula", 8);
+ncAuto.colorbar();
+ncAuto.TickLabelsAutoScale = true;
+ncAuto.TickLabelsAutoScaleDecimals = 2;
+
 %% Works with 3-D plots too
 % niceColorbar only reads/writes axes |Position|, so it attaches the same
 % way to a 3-D plot (e.g. |surf|) as it does to a 2-D one (e.g. |contourf|)
@@ -112,6 +129,18 @@ nc.saveAsPNG(pwd, "myFigure");
 % Calling the same methods from |niceColorbar.session()| (the |save.png|/
 % |save.pdf|/|save.fig| commands) instead pops up a single |uiputfile|
 % dialog to pick both the folder and file name interactively.
+
+%% Export resolution and PDF render mode
+% |ExportResolution| sets the pixels-per-inch used by |saveAsPNG| and by
+% |saveAsPDF| while |PdfRender| is |"image"| (the default - rasterized,
+% fast). Setting |PdfRender| to |"vector"| instead makes |saveAsPDF|
+% produce crisp, infinitely-scalable text/lines (slower, and
+% |ExportResolution| is then ignored since vector content has no fixed
+% resolution).
+nc.ExportResolution = 600;
+nc.PdfRender = "vector";
+nc.saveAsPDF();
+nc.PdfRender = "image";
 
 %% Next steps
 % * See |examples.m| for a multi-figure walkthrough, including logos,
