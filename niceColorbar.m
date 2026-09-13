@@ -2869,7 +2869,7 @@ function names = getCustomColormapNames()
   % kept in sync with the function names str2func(cmapName) must resolve to
   names = {'darkjet','feap','nice','acefem','paraview','fast','robot','ultra', ...
     'adina','adina2','vemlab','watermelon','darkwatermelon','polar','roma', ...
-    'cork','lime','limediv','spectral','RdYlBu'};
+    'cork','lime','limediv','spectral','RdYlBu','simsolid'};
 end
 
 function step = getLabelStep(nc)
@@ -3434,6 +3434,26 @@ function mymap = cork(numcolors)
           0.8182	0.2941	0.5294	0.3176
           0.9091	0.2157	0.4078	0.1922
           1.0000	0.2549	0.3294	0.1490];
+  mymap = interpColormapPoints(xrgb,'linear',numcolors);
+end
+
+function mymap = simsolid(numcolors)
+  xrgb = [0.0000	0.0000	0.3529	1.0000
+          0.0667	0.1451	0.5255	1.0000
+          0.1333	0.2902	0.6784	0.9490
+          0.2000	0.3804	0.8000	0.8745
+          0.2667	0.4431	0.8941	0.8588
+          0.3333	0.6235	0.9569	0.8510
+          0.4000	0.7765	0.9843	0.8549
+          0.4667	0.8784	0.9843	0.8667
+          0.5333	0.9843	0.9569	0.8275
+          0.6000	0.9765	0.9294	0.7020
+          0.6667	0.9922	0.8824	0.6196
+          0.7333	1.0000	0.7843	0.4784
+          0.8000	1.0000	0.6824	0.3686
+          0.8667	0.9843	0.5686	0.3216
+          0.9333	0.9922	0.4078	0.2039
+          1.0000	1.0000	0.0784	0.1020];
   mymap = interpColormapPoints(xrgb,'linear',numcolors);
 end
 

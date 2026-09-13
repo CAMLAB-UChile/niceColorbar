@@ -351,6 +351,7 @@ niceColorbar:
 | `limediv` | ![limediv](images/colormaps/limediv.png) |
 | `spectral` | ![spectral](images/colormaps/spectral.png) |
 | `RdYlBu` | ![RdYlBu](images/colormaps/RdYlBu.png) |
+| `simsolid` | ![simsolid](images/colormaps/simsolid.png) |
 
 ## Testing
 
