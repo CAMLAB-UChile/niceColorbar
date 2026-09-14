@@ -16,7 +16,10 @@ classdef niceColorbar < handle
     % suppresses the event if you reassign the same value), and that event
     % is what drives refresh() below once the colorbar has been built.
     ThemeMode = "auto" % 'auto' follows MATLAB's current light/dark mode; 'light' or 'dark'
-                       % forces that look regardless of MATLAB's actual theme
+                       % forces that look regardless of MATLAB's actual theme; 'cobalt' is a
+                       % second, explicit-only dark mode (COBALT background, WHITEGRAY
+                       % text/lines) - never selected by 'auto', which only ever resolves to
+                       % 'light' or 'dark' based on MATLAB's own theme
     TickLabelsFontName = "Times New Roman" %'Segoe UI Semibold';
     TickLabelsFontSize = 10
     TickLabelsFontWeight = "normal"
@@ -78,11 +81,14 @@ classdef niceColorbar < handle
                         % "Vectorized content might take a long time..." warning
                         % (suppressed automatically while 'vector' is selected -
                         % see saveFigureAs()); 'image' rasterizes instead, same
-                        % as saveAsPNG(), trading scalability for speed/reliability.
-    ExportResolution = 300 % pixels-per-inch used by saveAsPNG() and by saveAsPDF()
-                           % while PdfRender is 'image' - exportgraphics ignores it
-                           % entirely for PdfRender='vector' (vector content has no
+                        % as saveAsPNG()/saveAsTIFF(), trading scalability for speed/reliability.
+    ExportResolution = 300 % pixels-per-inch used by saveAsPNG(), saveAsTIFF(), and by
+                           % saveAsPDF() while PdfRender is 'image' - exportgraphics ignores
+                           % it entirely for PdfRender='vector' (vector content has no
                            % fixed resolution).
+    Box = "on" % 'on' (default) or 'off' - whether the axes' box outline is drawn.
+               % Previously colorbar() forced this on unconditionally; now it's a
+               % toggleable property, also reachable via session()'s box.on/box.off.
   end
 
   properties (Access = private)
@@ -179,8 +185,8 @@ classdef niceColorbar < handle
     % same behavior in a fraction of the code.
 
     function set.ThemeMode(obj,val)
-      checkAndAssign('ThemeMode',val,{@(v)mustBeMember(v,{'auto','light','dark'})}, ...
-        'value must be ''auto'', ''light'', or ''dark'' ');
+      checkAndAssign('ThemeMode',val,{@(v)mustBeMember(v,{'auto','light','dark','cobalt'})}, ...
+        'value must be ''auto'', ''light'', ''dark'', or ''cobalt'' ');
       obj.ThemeMode = val;
     end
     function set.TickLabelsFontName(obj,val)
@@ -332,6 +338,11 @@ classdef niceColorbar < handle
         'value must be a positive integer');
       obj.ExportResolution = val;
     end
+    function set.Box(obj,val)
+      checkAndAssign('Box',val,{@(v)mustBeMember(v,{'on','off'})}, ...
+        'value must be ''on'' or ''off'' ');
+      obj.Box = val;
+    end
 
   end
 
@@ -347,7 +358,7 @@ classdef niceColorbar < handle
       obj.ax = gca;
       obj.fig = ancestor(obj.ax,'figure');
       obj.resolveTheme();
-      box on;
+      box(obj.ax,obj.Box);
       axis equal;
 
       % capture the axes' normalized Position as it stands right now (i.e.
@@ -597,6 +608,17 @@ classdef niceColorbar < handle
       obj.saveFigureAs('pdf',folder,fileName);
     end
 
+    function saveAsTIFF(obj,folder,fileName)
+      % Exports the figure this colorbar is attached to as a TIFF image.
+      % See saveAsPNG() for the folder/fileName arguments' behavior.
+      arguments
+        obj
+        folder {mustBeTextScalar} = ''
+        fileName {mustBeTextScalar} = ''
+      end
+      obj.saveFigureAs('tiff',folder,fileName);
+    end
+
     function saveAsFIG(obj,folder,fileName)
       % Saves the figure this colorbar is attached to as an editable
       % MATLAB .fig file. See saveAsPNG() for the folder/fileName
@@ -631,229 +653,340 @@ classdef niceColorbar < handle
         switch txt
           case {'help','?'}
             niceColorbar.printSessionCommands();
-          case 'limits'
-            obj = niceColorbar.currentInstance();
-            if isempty(obj)
-              disp('No niceColorbar is registered on the current figure.');
-              continue
+          case 'exit'
+            keepRunning = false;
+            disp('Plotting session terminated by the user.');
+          otherwise
+            if ~niceColorbar.handleSessionCommand(txt)
+              disp('Command not available. Type ''help'' to see the list of commands.');
             end
-            maxVal = readNumberPrompt('  -> Enter max. value: ');
-            minVal = readNumberPrompt('  -> Enter min. value: ');
-            if isnan(maxVal) || isnan(minVal)
-              disp('Could not set limits: value must be a number');
-              continue
-            end
-            try
-              obj.setLimits([minVal maxVal]);
-            catch ME
-              disp(['Could not set limits: ',ME.message]);
-            end
-          case 'limits.capped'
-            obj = niceColorbar.currentInstance();
-            if isempty(obj)
-              disp('No niceColorbar is registered on the current figure.');
-              continue
-            end
-            maxVal = readNumberPrompt('  -> Enter max. value: ');
-            minVal = readNumberPrompt('  -> Enter min. value: ');
-            if isnan(maxVal) || isnan(minVal)
-              disp('Could not set capped limits: value must be a number');
-              continue
-            end
-            try
-              obj.setCappedLimits([minVal maxVal]);
-            catch ME
-              disp(['Could not set capped limits: ',ME.message]);
-            end
-          case 'limits.reset'
-            obj = niceColorbar.currentInstance();
-            if isempty(obj)
-              disp('No niceColorbar is registered on the current figure.');
-              continue
-            end
-            obj.resetLimits();
-          case 'style'
-            obj = niceColorbar.currentInstance();
-            if isempty(obj)
-              disp('No niceColorbar is registered on the current figure.');
-              continue
-            end
-            styleTxt = strtrim(input('  -> Enter style: ','s'));
-            try
-              obj.Style = styleTxt; % setter validates and auto-refreshes the live colorbar
-            catch ME
-              disp(['Could not set style: ',ME.message]);
-            end
-          case 'colors'
-            obj = niceColorbar.currentInstance();
-            if isempty(obj)
-              disp('No niceColorbar is registered on the current figure.');
-              continue
-            end
-            numColorsVal = readNumberPrompt('  -> Enter number of colors: ');
-            if isnan(numColorsVal)
-              disp('Could not set number of colors: value must be a number');
-              continue
-            end
-            try
-              obj.NumColormapColors = numColorsVal; % setter validates and auto-refreshes the live colorbar
-            catch ME
-              disp(['Could not set number of colors: ',ME.message]);
-            end
-          case 'colormap'
-            obj = niceColorbar.currentInstance();
-            if isempty(obj)
-              disp('No niceColorbar is registered on the current figure.');
-              continue
-            end
-            colormapTxt = strtrim(input('  -> Enter colormap: ','s'));
-            try
-              obj.ColormapName = colormapTxt; % setter validates and auto-refreshes the live colorbar
-            catch ME
-              disp(['Could not set colormap: ',ME.message]);
-            end
-          case 'dark'
-            list = niceColorbar.instancesOnCurrentFigure();
-            if isempty(list)
-              disp('No niceColorbar is registered on the current figure.');
-              continue
-            end
-            for i = 1:numel(list)
-              list{i}.ThemeMode = 'dark';
-            end
-          case 'light'
-            list = niceColorbar.instancesOnCurrentFigure();
-            if isempty(list)
-              disp('No niceColorbar is registered on the current figure.');
-              continue
-            end
-            for i = 1:numel(list)
-              list{i}.ThemeMode = 'light';
-            end
-          case 'autoscale.on'
-            obj = niceColorbar.currentInstance();
-            if isempty(obj)
-              disp('No niceColorbar is registered on the current figure.');
-              continue
-            end
-            decimalsVal = readNumberPrompt('  -> Enter number of decimals (blank = 2): ');
-            if isnan(decimalsVal)
-              decimalsVal = 2; % default when the user just presses Enter
-            end
-            try
-              obj.TickLabelsAutoScaleDecimals = decimalsVal; % setter validates and auto-refreshes the live colorbar
-            catch ME
-              disp(['Could not set number of decimals: ',ME.message]);
-              continue
-            end
-            obj.TickLabelsAutoScale = true; % setter validates and auto-refreshes the live colorbar
-          case 'autoscale.off'
-            obj = niceColorbar.currentInstance();
-            if isempty(obj)
-              disp('No niceColorbar is registered on the current figure.');
-              continue
-            end
-            obj.TickLabelsAutoScale = false; % setter validates and auto-refreshes the live colorbar
-          case 'hide.colorbar'
-            obj = niceColorbar.currentInstance();
-            if isempty(obj)
-              disp('No niceColorbar is registered on the current figure.');
-              continue
-            end
-            obj.ColorbarVisible = 'off'; % setter validates and auto-refreshes the live colorbar
-          case 'show.colorbar'
-            obj = niceColorbar.currentInstance();
-            if isempty(obj)
-              disp('No niceColorbar is registered on the current figure.');
-              continue
-            end
-            obj.ColorbarVisible = 'on'; % setter validates and auto-refreshes the live colorbar
-          case 'hide.title'
-            obj = niceColorbar.currentInstance();
-            if isempty(obj)
-              disp('No niceColorbar is registered on the current figure.');
-              continue
-            end
-            obj.TitleVisible = 'off'; % setter validates and auto-refreshes the live colorbar
-          case 'show.title'
-            obj = niceColorbar.currentInstance();
-            if isempty(obj)
-              disp('No niceColorbar is registered on the current figure.');
-              continue
-            end
-            obj.TitleVisible = 'on'; % setter validates and auto-refreshes the live colorbar
-          case 'hide.logo'
-            obj = niceColorbar.currentInstance();
-            if isempty(obj)
-              disp('No niceColorbar is registered on the current figure.');
-              continue
-            end
-            obj.LogoVisible = 'off'; % setter validates and auto-refreshes the live colorbar
-          case 'show.logo'
-            obj = niceColorbar.currentInstance();
-            if isempty(obj)
-              disp('No niceColorbar is registered on the current figure.');
-              continue
-            end
-            obj.LogoVisible = 'on'; % setter validates and auto-refreshes the live colorbar
-          case 'hide.all'
-            obj = niceColorbar.currentInstance();
-            if isempty(obj)
-              disp('No niceColorbar is registered on the current figure.');
-              continue
-            end
-            obj.SuspendRefresh = true;
-            obj.ColorbarVisible = 'off';
-            obj.TitleVisible = 'off';
-            obj.LogoVisible = 'off';
-            obj.SuspendRefresh = false;
-            obj.refresh();
-          case 'show.all'
-            obj = niceColorbar.currentInstance();
-            if isempty(obj)
-              disp('No niceColorbar is registered on the current figure.');
-              continue
-            end
-            obj.SuspendRefresh = true;
-            obj.ColorbarVisible = 'on';
-            obj.TitleVisible = 'on';
-            obj.LogoVisible = 'on';
-            obj.SuspendRefresh = false;
-            obj.refresh();
-          case 'side.left'
-            obj = niceColorbar.currentInstance();
-            if isempty(obj)
-              disp('No niceColorbar is registered on the current figure.');
-              continue
-            end
-            obj.Side = 'left'; % setter validates and auto-refreshes the live colorbar
-          case 'side.right'
-            obj = niceColorbar.currentInstance();
-            if isempty(obj)
-              disp('No niceColorbar is registered on the current figure.');
-              continue
-            end
-            obj.Side = 'right'; % setter validates and auto-refreshes the live colorbar
-          case 'side.top'
-            obj = niceColorbar.currentInstance();
-            if isempty(obj)
-              disp('No niceColorbar is registered on the current figure.');
-              continue
-            end
-            obj.Side = 'top'; % setter validates and auto-refreshes the live colorbar
-          case 'side.bottom'
-            obj = niceColorbar.currentInstance();
-            if isempty(obj)
-              disp('No niceColorbar is registered on the current figure.');
-              continue
-            end
-            obj.Side = 'bottom'; % setter validates and auto-refreshes the live colorbar
-          case 'save.png'
-            obj = niceColorbar.currentInstance();
-            if isempty(obj)
-              disp('No niceColorbar is registered on the current figure.');
-              continue
-            end
+        end
+      end
+    end
+
+    function recognized = handleSessionCommand(txt)
+      % Executes ONE niceColorbar session command - everything
+      % printSessionCommands() lists except 'help'/'?' and 'exit', which
+      % are loop control left to the caller. Factored out of session()'s
+      % own loop so other interactive sessions built on top of niceColorbar
+      % - e.g. nicePlots' niceSession(), which mixes in its own commands
+      % (mesh.show/mesh.hide, ...) around this same set - can reuse this
+      % exact command handling instead of re-implementing it.
+      %
+      % Returns false (printing nothing) when txt isn't a recognized
+      % niceColorbar command, so a caller mixing in commands of its own can
+      % report "not available" exactly once instead of twice.
+      recognized = true;
+      switch txt
+        case 'limits'
+          obj = niceColorbar.currentInstance();
+          if isempty(obj)
+            disp('No niceColorbar is registered on the current figure.');
+            return
+          end
+          maxVal = readNumberPrompt('  -> Enter max. value: ');
+          minVal = readNumberPrompt('  -> Enter min. value: ');
+          if isnan(maxVal) || isnan(minVal)
+            disp('Could not set limits: value must be a number');
+            return
+          end
+          try
+            obj.setLimits([minVal maxVal]);
+          catch ME
+            disp(['Could not set limits: ',ME.message]);
+          end
+        case 'limits.capped'
+          obj = niceColorbar.currentInstance();
+          if isempty(obj)
+            disp('No niceColorbar is registered on the current figure.');
+            return
+          end
+          maxVal = readNumberPrompt('  -> Enter max. value: ');
+          minVal = readNumberPrompt('  -> Enter min. value: ');
+          if isnan(maxVal) || isnan(minVal)
+            disp('Could not set capped limits: value must be a number');
+            return
+          end
+          try
+            obj.setCappedLimits([minVal maxVal]);
+          catch ME
+            disp(['Could not set capped limits: ',ME.message]);
+          end
+        case 'limits.reset'
+          obj = niceColorbar.currentInstance();
+          if isempty(obj)
+            disp('No niceColorbar is registered on the current figure.');
+            return
+          end
+          obj.resetLimits();
+        case 'style'
+          obj = niceColorbar.currentInstance();
+          if isempty(obj)
+            disp('No niceColorbar is registered on the current figure.');
+            return
+          end
+          styleTxt = strtrim(input('  -> Enter style: ','s'));
+          try
+            obj.Style = styleTxt; % setter validates and auto-refreshes the live colorbar
+          catch ME
+            disp(['Could not set style: ',ME.message]);
+          end
+        case 'colors'
+          obj = niceColorbar.currentInstance();
+          if isempty(obj)
+            disp('No niceColorbar is registered on the current figure.');
+            return
+          end
+          numColorsVal = readNumberPrompt('  -> Enter number of colors: ');
+          if isnan(numColorsVal)
+            disp('Could not set number of colors: value must be a number');
+            return
+          end
+          try
+            obj.NumColormapColors = numColorsVal; % setter validates and auto-refreshes the live colorbar
+          catch ME
+            disp(['Could not set number of colors: ',ME.message]);
+          end
+        case 'colormap'
+          obj = niceColorbar.currentInstance();
+          if isempty(obj)
+            disp('No niceColorbar is registered on the current figure.');
+            return
+          end
+          colormapTxt = strtrim(input('  -> Enter colormap: ','s'));
+          try
+            obj.ColormapName = colormapTxt; % setter validates and auto-refreshes the live colorbar
+          catch ME
+            disp(['Could not set colormap: ',ME.message]);
+          end
+        case 'dark'
+          list = niceColorbar.instancesOnCurrentFigure();
+          if isempty(list)
+            disp('No niceColorbar is registered on the current figure.');
+            return
+          end
+          for i = 1:numel(list)
+            list{i}.ThemeMode = 'dark';
+          end
+        case 'light'
+          list = niceColorbar.instancesOnCurrentFigure();
+          if isempty(list)
+            disp('No niceColorbar is registered on the current figure.');
+            return
+          end
+          for i = 1:numel(list)
+            list{i}.ThemeMode = 'light';
+          end
+        case 'cobalt'
+          list = niceColorbar.instancesOnCurrentFigure();
+          if isempty(list)
+            disp('No niceColorbar is registered on the current figure.');
+            return
+          end
+          for i = 1:numel(list)
+            list{i}.ThemeMode = 'cobalt';
+          end          
+        case 'autoscale.on'
+          obj = niceColorbar.currentInstance();
+          if isempty(obj)
+            disp('No niceColorbar is registered on the current figure.');
+            return
+          end
+          decimalsVal = readNumberPrompt('  -> Enter number of decimals (blank = 2): ');
+          if isnan(decimalsVal)
+            decimalsVal = 2; % default when the user just presses Enter
+          end
+          try
+            obj.TickLabelsAutoScaleDecimals = decimalsVal; % setter validates and auto-refreshes the live colorbar
+          catch ME
+            disp(['Could not set number of decimals: ',ME.message]);
+            return
+          end
+          obj.TickLabelsAutoScale = true; % setter validates and auto-refreshes the live colorbar
+        case 'autoscale.off'
+          obj = niceColorbar.currentInstance();
+          if isempty(obj)
+            disp('No niceColorbar is registered on the current figure.');
+            return
+          end
+          obj.TickLabelsAutoScale = false; % setter validates and auto-refreshes the live colorbar
+        case 'box.on'
+          obj = niceColorbar.currentInstance();
+          if isempty(obj)
+            disp('No niceColorbar is registered on the current figure.');
+            return
+          end
+          obj.Box = 'on'; % setter validates and auto-refreshes the live colorbar
+        case 'box.off'
+          obj = niceColorbar.currentInstance();
+          if isempty(obj)
+            disp('No niceColorbar is registered on the current figure.');
+            return
+          end
+          obj.Box = 'off'; % setter validates and auto-refreshes the live colorbar
+        case 'hide.colorbar'
+          obj = niceColorbar.currentInstance();
+          if isempty(obj)
+            disp('No niceColorbar is registered on the current figure.');
+            return
+          end
+          obj.ColorbarVisible = 'off'; % setter validates and auto-refreshes the live colorbar
+        case 'show.colorbar'
+          obj = niceColorbar.currentInstance();
+          if isempty(obj)
+            disp('No niceColorbar is registered on the current figure.');
+            return
+          end
+          obj.ColorbarVisible = 'on'; % setter validates and auto-refreshes the live colorbar
+        case 'hide.title'
+          obj = niceColorbar.currentInstance();
+          if isempty(obj)
+            disp('No niceColorbar is registered on the current figure.');
+            return
+          end
+          obj.TitleVisible = 'off'; % setter validates and auto-refreshes the live colorbar
+        case 'show.title'
+          obj = niceColorbar.currentInstance();
+          if isempty(obj)
+            disp('No niceColorbar is registered on the current figure.');
+            return
+          end
+          obj.TitleVisible = 'on'; % setter validates and auto-refreshes the live colorbar
+        case 'hide.logo'
+          obj = niceColorbar.currentInstance();
+          if isempty(obj)
+            disp('No niceColorbar is registered on the current figure.');
+            return
+          end
+          obj.LogoVisible = 'off'; % setter validates and auto-refreshes the live colorbar
+        case 'show.logo'
+          obj = niceColorbar.currentInstance();
+          if isempty(obj)
+            disp('No niceColorbar is registered on the current figure.');
+            return
+          end
+          obj.LogoVisible = 'on'; % setter validates and auto-refreshes the live colorbar
+        case 'hide.all'
+          obj = niceColorbar.currentInstance();
+          if isempty(obj)
+            disp('No niceColorbar is registered on the current figure.');
+            return
+          end
+          obj.SuspendRefresh = true;
+          obj.ColorbarVisible = 'off';
+          obj.TitleVisible = 'off';
+          obj.LogoVisible = 'off';
+          obj.SuspendRefresh = false;
+          obj.refresh();
+        case 'show.all'
+          obj = niceColorbar.currentInstance();
+          if isempty(obj)
+            disp('No niceColorbar is registered on the current figure.');
+            return
+          end
+          obj.SuspendRefresh = true;
+          obj.ColorbarVisible = 'on';
+          obj.TitleVisible = 'on';
+          obj.LogoVisible = 'on';
+          obj.SuspendRefresh = false;
+          obj.refresh();
+        case 'side.left'
+          obj = niceColorbar.currentInstance();
+          if isempty(obj)
+            disp('No niceColorbar is registered on the current figure.');
+            return
+          end
+          obj.Side = 'left'; % setter validates and auto-refreshes the live colorbar
+        case 'side.right'
+          obj = niceColorbar.currentInstance();
+          if isempty(obj)
+            disp('No niceColorbar is registered on the current figure.');
+            return
+          end
+          obj.Side = 'right'; % setter validates and auto-refreshes the live colorbar
+        case 'side.top'
+          obj = niceColorbar.currentInstance();
+          if isempty(obj)
+            disp('No niceColorbar is registered on the current figure.');
+            return
+          end
+          obj.Side = 'top'; % setter validates and auto-refreshes the live colorbar
+        case 'side.bottom'
+          obj = niceColorbar.currentInstance();
+          if isempty(obj)
+            disp('No niceColorbar is registered on the current figure.');
+            return
+          end
+          obj.Side = 'bottom'; % setter validates and auto-refreshes the live colorbar
+        case 'save.png'
+          obj = niceColorbar.currentInstance();
+          if isempty(obj)
+            disp('No niceColorbar is registered on the current figure.');
+            return
+          end
+          resolutionVal = readNumberPrompt('  -> Enter export resolution in DPI (blank = 300): ');
+          if isnan(resolutionVal)
+            resolutionVal = 300; % default when the user just presses Enter
+          end
+          try
+            obj.ExportResolution = resolutionVal; % setter validates and auto-refreshes the live colorbar
+          catch ME
+            disp(['Could not set export resolution: ',ME.message]);
+            return
+          end
+          [fileName,folder] = uiputfile('*.png','Save PNG as','figure.png');
+          if isequal(fileName,0)
+            disp('Save cancelled.');
+            return
+          end
+          try
+            obj.saveAsPNG(folder,fileName);
+          catch ME
+            disp(['Could not save PNG: ',ME.message]);
+          end
+        case 'save.tiff'
+          obj = niceColorbar.currentInstance();
+          if isempty(obj)
+            disp('No niceColorbar is registered on the current figure.');
+            return
+          end
+          resolutionVal = readNumberPrompt('  -> Enter export resolution in DPI (blank = 300): ');
+          if isnan(resolutionVal)
+            resolutionVal = 300; % default when the user just presses Enter
+          end
+          try
+            obj.ExportResolution = resolutionVal; % setter validates and auto-refreshes the live colorbar
+          catch ME
+            disp(['Could not set export resolution: ',ME.message]);
+            return
+          end
+          [fileName,folder] = uiputfile('*.tiff','Save TIFF as','figure.tiff');
+          if isequal(fileName,0)
+            disp('Save cancelled.');
+            return
+          end
+          try
+            obj.saveAsTIFF(folder,fileName);
+          catch ME
+            disp(['Could not save TIFF: ',ME.message]);
+          end
+        case 'save.pdf'
+          obj = niceColorbar.currentInstance();
+          if isempty(obj)
+            disp('No niceColorbar is registered on the current figure.');
+            return
+          end
+          renderTxt = strtrim(input('  -> Enter render type: vector/image (blank = image): ','s'));
+          if isempty(renderTxt)
+            renderTxt = 'image'; % default when the user just presses Enter
+          end
+          try
+            obj.PdfRender = renderTxt; % setter validates and auto-refreshes the live colorbar
+          catch ME
+            disp(['Could not set render type: ',ME.message]);
+            return
+          end
+          if obj.PdfRender == "image"
             resolutionVal = readNumberPrompt('  -> Enter export resolution in DPI (blank = 300): ');
             if isnan(resolutionVal)
               resolutionVal = 300; % default when the user just presses Enter
@@ -862,79 +995,104 @@ classdef niceColorbar < handle
               obj.ExportResolution = resolutionVal; % setter validates and auto-refreshes the live colorbar
             catch ME
               disp(['Could not set export resolution: ',ME.message]);
-              continue
+              return
             end
-            [fileName,folder] = uiputfile('*.png','Save PNG as','figure.png');
-            if isequal(fileName,0)
-              disp('Save cancelled.');
-              continue
-            end
-            try
-              obj.saveAsPNG(folder,fileName);
-            catch ME
-              disp(['Could not save PNG: ',ME.message]);
-            end
-          case 'save.pdf'
-            obj = niceColorbar.currentInstance();
-            if isempty(obj)
-              disp('No niceColorbar is registered on the current figure.');
-              continue
-            end
-            renderTxt = strtrim(input('  -> Enter render type: vector/image (blank = image): ','s'));
-            if isempty(renderTxt)
-              renderTxt = 'image'; % default when the user just presses Enter
-            end
-            try
-              obj.PdfRender = renderTxt; % setter validates and auto-refreshes the live colorbar
-            catch ME
-              disp(['Could not set render type: ',ME.message]);
-              continue
-            end
-            if obj.PdfRender == "image"
-              resolutionVal = readNumberPrompt('  -> Enter export resolution in DPI (blank = 300): ');
-              if isnan(resolutionVal)
-                resolutionVal = 300; % default when the user just presses Enter
-              end
-              try
-                obj.ExportResolution = resolutionVal; % setter validates and auto-refreshes the live colorbar
-              catch ME
-                disp(['Could not set export resolution: ',ME.message]);
-                continue
-              end
-            end
-            [fileName,folder] = uiputfile('*.pdf','Save PDF as','figure.pdf');
-            if isequal(fileName,0)
-              disp('Save cancelled.');
-              continue
-            end
-            try
-              obj.saveAsPDF(folder,fileName);
-            catch ME
-              disp(['Could not save PDF: ',ME.message]);
-            end
-          case 'save.fig'
-            obj = niceColorbar.currentInstance();
-            if isempty(obj)
-              disp('No niceColorbar is registered on the current figure.');
-              continue
-            end
-            [fileName,folder] = uiputfile('*.fig','Save FIG as','figure.fig');
-            if isequal(fileName,0)
-              disp('Save cancelled.');
-              continue
-            end
-            try
-              obj.saveAsFIG(folder,fileName);
-            catch ME
-              disp(['Could not save FIG: ',ME.message]);
-            end
-          case 'exit'
-            keepRunning = false;
-            disp('Plotting session terminated by the user.');
-          otherwise
-            disp('Command not available. Type ''help'' to see the list of commands.');
+          end
+          [fileName,folder] = uiputfile('*.pdf','Save PDF as','figure.pdf');
+          if isequal(fileName,0)
+            disp('Save cancelled.');
+            return
+          end
+          try
+            obj.saveAsPDF(folder,fileName);
+          catch ME
+            disp(['Could not save PDF: ',ME.message]);
+          end
+        case 'save.fig'
+          obj = niceColorbar.currentInstance();
+          if isempty(obj)
+            disp('No niceColorbar is registered on the current figure.');
+            return
+          end
+          [fileName,folder] = uiputfile('*.fig','Save FIG as','figure.fig');
+          if isequal(fileName,0)
+            disp('Save cancelled.');
+            return
+          end
+          try
+            obj.saveAsFIG(folder,fileName);
+          catch ME
+            disp(['Could not save FIG: ',ME.message]);
+          end
+        otherwise
+          recognized = false;
+      end
+    end
+
+    function names = sessionCommandNames()
+      % Names of every command handleSessionCommand() recognizes, plus the
+      % loop-control ones session() itself handles ('help'/'?' and 'exit').
+      % Public so other interactive sessions built on top of niceColorbar -
+      % e.g. nicePlots' niceSession() - can list these alongside their own
+      % commands in one merged 'help' output.
+      names = {'help','limits','limits.capped','limits.reset','style','colors','colormap', ...
+                  'dark','light','cobalt','autoscale.on','autoscale.off','box.on','box.off', ...
+                  'hide.colorbar','show.colorbar', ...
+                  'hide.title','show.title','hide.logo','show.logo','hide.all','show.all', ...
+                  'side.left','side.right','side.top','side.bottom','save.png','save.tiff', ...
+                  'save.pdf','save.fig','exit'};
+    end
+
+    function obj = currentInstance()
+      % Resolves which niceColorbar instance session()/handleSessionCommand()
+      % should act on: the one registered against whichever figure currently
+      % has focus (per groot().CurrentFigure - unlike gcf, this never creates
+      % a new figure just by being queried). If that figure hosts more than
+      % one niceColorbar (e.g. one per subplot), prefer the one whose axes
+      % matches the figure's CurrentAxes.
+      %
+      % Public (rather than private) so other interactive sessions built on
+      % top of niceColorbar - e.g. nicePlots' niceSession() - can resolve
+      % the same target instance for their own commands.
+      obj = [];
+      fig = get(groot,'CurrentFigure');
+      if isempty(fig) || ~isvalid(fig)
+        return
+      end
+      list = niceColorbar.resizeHub('get',fig);
+      if isempty(list)
+        return
+      end
+      curAx = get(fig,'CurrentAxes');
+      if numel(list) > 1 && ~isempty(curAx)
+        idx = find(cellfun(@(o) isequal(o.ax,curAx), list),1);
+        if ~isempty(idx)
+          obj = list{idx};
+          return
         end
       end
+      obj = list{1};
+    end
+
+    function list = instancesOnCurrentFigure()
+      % All still-valid niceColorbar instances registered against whichever
+      % figure currently has focus (per groot().CurrentFigure). Unlike
+      % currentInstance() - which picks the single instance matching the
+      % focused axes, for commands like limits/style that should only touch
+      % one subplot - this returns every instance on the figure, since
+      % ThemeMode changes obj.fig.Color (shared by every axes on that
+      % figure): applying it to only one instance would leave sibling
+      % subplots' axes/colorbar colors out of sync with the new background.
+      %
+      % Public (rather than private) so other interactive sessions built on
+      % top of niceColorbar - e.g. nicePlots' niceSession() - can resolve
+      % the same targets for their own figure-wide commands.
+      list = {};
+      fig = get(groot,'CurrentFigure');
+      if isempty(fig) || ~isvalid(fig)
+        return
+      end
+      list = niceColorbar.resizeHub('get',fig);
     end
 
   end
@@ -946,12 +1104,7 @@ classdef niceColorbar < handle
       % most 100 columns each); string concatenation with '...' line
       % continuations does not - it just builds one long line that looks
       % broken up in the source but prints as a single wide line.
-      commands = {'help','limits','limits.capped','limits.reset','style','colors','colormap', ...
-                  'dark','light','autoscale.on','autoscale.off','hide.colorbar','show.colorbar', ...
-                  'hide.title','show.title','hide.logo','show.logo','hide.all','show.all', ...
-                  'side.left','side.right','side.top','side.bottom','save.png','save.pdf', ...
-                  'save.fig','exit'};
-      fprintf('Commands:\n%s\n',wrapCommaList(commands,100));
+      fprintf('Commands:\n%s\n',wrapCommaList(niceColorbar.sessionCommandNames(),100));
     end
 
     function out = resizeHub(action,fig,obj)
@@ -1087,56 +1240,12 @@ classdef niceColorbar < handle
       end
     end
 
-    function obj = currentInstance()
-      % Resolves which niceColorbar instance session() should act on: the
-      % one registered against whichever figure currently has focus (per
-      % groot().CurrentFigure - unlike gcf, this never creates a new figure
-      % just by being queried). If that figure hosts more than one
-      % niceColorbar (e.g. one per subplot), prefer the one whose axes
-      % matches the figure's CurrentAxes.
-      obj = [];
-      fig = get(groot,'CurrentFigure');
-      if isempty(fig) || ~isvalid(fig)
-        return
-      end
-      list = niceColorbar.resizeHub('get',fig);
-      if isempty(list)
-        return
-      end
-      curAx = get(fig,'CurrentAxes');
-      if numel(list) > 1 && ~isempty(curAx)
-        idx = find(cellfun(@(o) isequal(o.ax,curAx), list),1);
-        if ~isempty(idx)
-          obj = list{idx};
-          return
-        end
-      end
-      obj = list{1};
-    end
-
-    function list = instancesOnCurrentFigure()
-      % All still-valid niceColorbar instances registered against whichever
-      % figure currently has focus (per groot().CurrentFigure). Unlike
-      % currentInstance() - which picks the single instance matching the
-      % focused axes, for commands like limits/style that should only touch
-      % one subplot - this returns every instance on the figure, since
-      % ThemeMode changes obj.fig.Color (shared by every axes on that
-      % figure): applying it to only one instance would leave sibling
-      % subplots' axes/colorbar colors out of sync with the new background.
-      list = {};
-      fig = get(groot,'CurrentFigure');
-      if isempty(fig) || ~isvalid(fig)
-        return
-      end
-      list = niceColorbar.resizeHub('get',fig);
-    end
-
   end
 
   methods (Access = private)
 
     function filePath = saveFigureAs(obj,format,folder,fileName)
-      % Shared implementation behind saveAsPNG()/saveAsPDF(). folder = ''
+      % Shared implementation behind saveAsPNG()/saveAsTIFF()/saveAsPDF(). folder = ''
       % and fileName = '' (the defaults from both public methods) resolve
       % to an auto-generated name (figure number + timestamp) written to a
       % "SavedFigures" folder inside the niceColorbar toolbox folder, so
@@ -1176,28 +1285,79 @@ classdef niceColorbar < handle
       drawnow;
       pause(0.2);
       switch format
-        case 'png'
-          exportgraphics(obj.fig,filePath,'Resolution',obj.ExportResolution);
+        case {'png','tiff'}
+          % 'tight' (exportgraphics' default Padding for png/tiff) crops flush
+          % against the outermost content - a few points of slack keeps the
+          % Title/Logo/tick labels from looking clipped at the edge
+          exportgraphics(obj.fig,filePath,'Resolution',obj.ExportResolution, ...
+            'Padding',10,'Units','points');
         case 'pdf'
           if obj.PdfRender == "vector"
             % exportgraphics warns every time vector content is requested
             % ("Vectorized content might take a long time...") - expected
             % and harmless given the user explicitly opted into 'vector',
             % so silence just this one warning ID for the call rather than
-            % leaving it to spam the console on every save.
+            % leaving it to spam the console on every save. Unlike the
+            % 'image' branch below, vector content already crops/pages
+            % tightly on its own with a plain numeric Padding.
             warnState = warning('off','MATLAB:print:ContentTypeImageSuggested');
             cleanupWarn = onCleanup(@() warning(warnState));
-            exportgraphics(obj.fig,filePath,'ContentType','vector');
+            exportgraphics(obj.fig,filePath,'ContentType','vector', ...
+              'Padding',10,'Units','points');
           else
-            exportgraphics(obj.fig,filePath,'ContentType','image','Resolution',obj.ExportResolution);
+            % For ContentType='image', exportgraphics pages a PDF to the
+            % SOURCE FIGURE'S OWN size, then places the tightly-cropped
+            % raster inside that fixed-size page - Padding only affects how
+            % tightly the raster itself is cropped, not the page dimensions.
+            % Since niceColorbar's axes are deliberately shrunk to leave
+            % room for the colorbar/title/logo, the figure canvas is
+            % usually much bigger than that raster, so the page ends up
+            % mostly blank around a small centered image. Sidestep this by
+            % rendering the same tightly-cropped/padded raster used by
+            % saveAsPNG/saveAsTIFF, then re-exporting THAT image (via a
+            % throwaway full-bleed figure sized to match it) as the PDF -
+            % its own page then has nothing to be tight against but the
+            % image itself.
+            tmpPngPath = [tempname,'.png'];
+            cleanupTmpPng = onCleanup(@() delete(tmpPngPath));
+            exportgraphics(obj.fig,tmpPngPath,'Resolution',obj.ExportResolution, ...
+              'Padding',10,'Units','points');
+            img = imread(tmpPngPath);
+            imgH = size(img,1);
+            imgW = size(img,2);
+            % Size the throwaway figure to the SAME aspect ratio as the
+            % image (scaled down to fit the screen if needed - a figure
+            % Position bigger than the screen gets silently clipped by
+            % MATLAB, which would reintroduce letterboxing below) so the
+            % full-bleed axes needs no aspect-preserving fit that could
+            % letterbox it against the image.
+            screenSize = get(0,'ScreenSize');
+            scaleFactor = min([1, 0.8*screenSize(4)/imgH, 0.8*screenSize(3)/imgW]);
+            imgFig = figure('Visible','off','Units','pixels', ...
+              'Position',[100 100 max(imgW*scaleFactor,50) max(imgH*scaleFactor,50)]);
+            cleanupImgFig = onCleanup(@() close(imgFig));
+            imgAx = axes(imgFig,'Units','normalized','Position',[0 0 1 1]);
+            image(imgAx,img);
+            axis(imgAx,'off');
+            imgAx.XLim = [0.5, imgW+0.5];
+            imgAx.YLim = [0.5, imgH+0.5];
+            wPts = imgW/obj.ExportResolution*72;
+            hPts = imgH/obj.ExportResolution*72;
+            % A sub-point rounding gap between the rendered content and the
+            % requested Width/Height page can otherwise show through as a
+            % thin black sliver (undrawn PDF page area) rather than
+            % matching the figure's own background.
+            exportgraphics(imgFig,filePath,'ContentType','image', ...
+              'Resolution',obj.ExportResolution,'Width',wPts,'Height',hPts,'Units','points', ...
+              'BackgroundColor',obj.ThemeBgColor);
           end
         case 'fig'
           % savefig(), not exportgraphics() - .fig is MATLAB's own editable
           % figure format, not a rendered image/vector export
           savefig(obj.fig,filePath);
         otherwise
-          % format is always 'png', 'pdf', or 'fig', passed internally by
-          % saveAsPNG()/saveAsPDF()/saveAsFIG() - no other value is ever passed
+          % format is always 'png', 'tiff', 'pdf', or 'fig', passed internally by
+          % saveAsPNG()/saveAsTIFF()/saveAsPDF()/saveAsFIG() - no other value is ever passed
           error('niceColorbar:saveFigureAs:invalidFormat','unknown format ''%s''',format);
       end
       fprintf('niceColorbar: saved %s\n',filePath);
@@ -1226,18 +1386,25 @@ classdef niceColorbar < handle
       % property.
       switch obj.ThemeMode
         case 'dark'
-          useDark = true;
+          obj.ThemeBgColor = [0.15 0.15 0.15];
+          obj.ThemeFontColor = [1 1 1];
+        case 'cobalt'
+          % A second, explicit-only dark mode with no light/dark-style
+          % 'auto' detection of its own - see the ThemeMode property
+          % comment.
+          obj.ThemeBgColor = [0.254901975393295 0.266666680574417 0.372549027204514]; % COBALT
+          obj.ThemeFontColor = [0.862745106220245 0.862745106220245 0.862745106220245]; % WHITEGRAY
         case 'light'
-          useDark = false;
+          obj.ThemeBgColor = [1 1 1];
+          obj.ThemeFontColor = [0 0 0];
         otherwise % 'auto'
-          useDark = isMatlabDarkMode(obj.fig);
-      end
-      if useDark
-        obj.ThemeBgColor = [0.15 0.15 0.15];
-        obj.ThemeFontColor = [1 1 1];
-      else
-        obj.ThemeBgColor = [1 1 1];
-        obj.ThemeFontColor = [0 0 0];
+          if isMatlabDarkMode(obj.fig)
+            obj.ThemeBgColor = [0.15 0.15 0.15];
+            obj.ThemeFontColor = [1 1 1];
+          else
+            obj.ThemeBgColor = [1 1 1];
+            obj.ThemeFontColor = [0 0 0];
+          end
       end
       obj.fig.Color = obj.ThemeBgColor;
       obj.ax.Color = obj.ThemeBgColor;
@@ -1255,6 +1422,7 @@ classdef niceColorbar < handle
       % the colormap and tick labels on every resize tick is what used to
       % cause drag-time lag.
       obj.resolveTheme();
+      box(obj.ax,obj.Box);
       styleParams = getStyleParams();
       if ~isKey(styleParams,obj.Style)
         error('niceColorbar:colorbar:styleNotAvailable','colorbar style not available!');
@@ -1766,16 +1934,38 @@ classdef niceColorbar < handle
       % against a marker from a burst that's no longer relevant.
       obj.SettlePollMarker = [];
       obj.SettlePollCount = 0;
-      if isempty(obj.SettleTimer) || ~isvalid(obj.SettleTimer)
+      try
+        if isempty(obj.SettleTimer) || ~isvalid(obj.SettleTimer)
+          obj.SettleTimer = timer('ExecutionMode','singleShot','StartDelay',0.35, ...
+            'TimerFcn',@(~,~) obj.onSettleRefresh());
+        else
+          if strcmp(obj.SettleTimer.Running,'on')
+            stop(obj.SettleTimer);
+          end
+          obj.SettleTimer.StartDelay = 0.35;
+        end
+        start(obj.SettleTimer);
+      catch
+        % stop() only REQUESTS a stop - if this call landed while the
+        % timer's own TimerFcn (onSettleRefresh) was still finishing on its
+        % callback thread, Running can still read 'on' right after stop()
+        % returns, and the StartDelay/start() above then throws "cannot be
+        % set/called while Timer is running". Recover by discarding the
+        % stale timer object and starting fresh, rather than letting the
+        % error propagate up through onResize -> resizeHub's dispatch loop,
+        % which would otherwise abort the resize refresh for every
+        % niceColorbar sharing the figure.
+        if ~isempty(obj.SettleTimer) && isvalid(obj.SettleTimer)
+          try
+            stop(obj.SettleTimer);
+          catch
+          end
+          delete(obj.SettleTimer);
+        end
         obj.SettleTimer = timer('ExecutionMode','singleShot','StartDelay',0.35, ...
           'TimerFcn',@(~,~) obj.onSettleRefresh());
-      else
-        if strcmp(obj.SettleTimer.Running,'on')
-          stop(obj.SettleTimer);
-        end
-        obj.SettleTimer.StartDelay = 0.35;
+        start(obj.SettleTimer);
       end
-      start(obj.SettleTimer);
     end
 
     function cancelSettleRefresh(obj)

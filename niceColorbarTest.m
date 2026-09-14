@@ -287,6 +287,42 @@ classdef niceColorbarTest < matlab.unittest.TestCase
       end
     end
 
+    %% cobalt: a second, explicit-only dark ThemeMode
+    function testThemeModeAcceptsCobalt(testCase)
+      [~, ax] = testCase.createFigureWithAxes();
+      axes(ax);
+      nc = niceColorbar();
+      nc.colorbar();
+      nc.ThemeMode = 'cobalt';
+      COBALT = [0.254901975393295 0.266666680574417 0.372549027204514];
+      WHITEGRAY = [0.862745106220245 0.862745106220245 0.862745106220245];
+      fig = ancestor(ax,'figure');
+      testCase.verifyEqual(fig.Color, COBALT);
+      testCase.verifyEqual(ax.Color, COBALT);
+      testCase.verifyEqual(ax.XColor, WHITEGRAY);
+      testCase.verifyEqual(ax.YColor, WHITEGRAY);
+    end
+
+    function testThemeModeAutoNeverResolvesToCobalt(testCase)
+      % 'auto' only ever follows MATLAB's own light/dark mode - 'cobalt'
+      % is reachable only by setting ThemeMode explicitly.
+      [~, ax] = testCase.createFigureWithAxes();
+      axes(ax);
+      nc = niceColorbar();
+      nc.colorbar();
+      COBALT = [0.254901975393295 0.266666680574417 0.372549027204514];
+      fig = ancestor(ax,'figure');
+      testCase.verifyNotEqual(fig.Color, COBALT);
+    end
+
+    function testThemeModeSetterRejectsInvalidValue(testCase)
+      nc = niceColorbar();
+      testCase.verifyError(@() setTheme(nc), 'niceColorbar:setThemeMode:valueError');
+      function setTheme(nc)
+        nc.ThemeMode = 'not-a-theme';
+      end
+    end
+
     function testTitleColorAcceptsEmptyAndCellSpec(testCase)
       nc = niceColorbar();
       nc.TitleColor = []; %#ok<*NASGU> - must not throw

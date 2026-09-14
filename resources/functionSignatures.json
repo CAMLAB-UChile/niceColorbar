@@ -43,6 +43,14 @@
     ]
   },
 
+  "niceColorbar.saveAsTIFF": {
+    "inputs": [
+      {"name":"obj", "kind":"required", "type":["niceColorbar"]},
+      {"name":"folder", "kind":"ordered", "type":["char"]},
+      {"name":"fileName", "kind":"ordered", "type":["char"]}
+    ]
+  },
+
   "niceColorbar.saveAsPDF": {
     "inputs": [
       {"name":"obj", "kind":"required", "type":["niceColorbar"]},

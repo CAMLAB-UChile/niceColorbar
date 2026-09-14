@@ -1,13 +1,13 @@
 # niceColorbar
 
 A drop-in, styled replacement for MATLAB's `colorbar` — six size/style presets, a
-LaTeX-capable title and corner logo, light/dark theme awareness, and
+LaTeX-capable title and corner logo, light/dark/cobalt theme awareness, and
 auto-refresh: change a property after the colorbar is built and it updates in
 place, no rebuild call required. Works the same way on 2-D plots (`contourf`,
 `imagesc`, ...) and 3-D plots (`surf`, ...), including through interactive
 rotation/pan. Supports one instance per subplot on a shared figure (theme
-changes stay in sync across all of them), plus one-line PNG/PDF/FIG figure
-export.
+changes stay in sync across all of them), plus one-line PNG/TIFF/PDF/FIG
+figure export.
 
 **First time here?** Follow this path: `QuickStart.m` (see it work) →
 `doc/GettingStarted.m` (tour the commands/options) → `examples.m` (many more
@@ -33,9 +33,11 @@ Light mode niceColorbar samples.
   `TitleColor`.
 - A corner `Logo` with independent per-segment coloring via inline
   `\color[rgb]{...}` tags.
-- Light/dark theme awareness (`ThemeMode`), including an `'auto'` mode that
-  follows MATLAB's current theme, kept in sync across every instance on a
+- Light/dark/cobalt theme awareness (`ThemeMode`): an `'auto'` mode that
+  follows MATLAB's current light/dark theme, plus explicit `'light'`,
+  `'dark'`, and `'cobalt'` overrides, kept in sync across every instance on a
   shared figure.
+- Togglable axes `Box` outline (`Box`, or `session()`'s `box.on`/`box.off`).
 - Works the same way on 2-D plots (`contourf`, `imagesc`, ...) and 3-D plots
   (`surf`, ...), including through interactive rotation/pan.
 - One instance per subplot on a shared figure — multiple colorbars stay
@@ -47,7 +49,7 @@ Light mode niceColorbar samples.
   (`TickLabelsAutoScale`), for data whose limits sit far from order-1.
 - Independent visibility toggles for the bar, title, and logo
   (`ColorbarVisible`/`TitleVisible`/`LogoVisible`).
-- One-line PNG/PDF/FIG figure export (`saveAsPNG`/`saveAsPDF`/`saveAsFIG`),
+- One-line PNG/TIFF/PDF/FIG figure export (`saveAsPNG`/`saveAsTIFF`/`saveAsPDF`/`saveAsFIG`),
   with configurable export resolution (`ExportResolution`) and PDF render
   mode (`PdfRender`).
 - `session()`: a keyboard-driven interactive console for adjusting a
@@ -94,6 +96,7 @@ nc.Title = {'My title'};                                % set title
 nc.Side = "top";                                        % colorbar location
 nc.colorbar();                                          % create colorbar
 nc.saveAsPNG();                                         % save figure as PNG image
+nc.saveAsTIFF();                                        % save figure as TIFF image
 nc.saveAsPDF();                                         % print figure to a PDF file
 nc.saveAsFIG();                                         % save as MATLAB figure
 ```
@@ -115,6 +118,7 @@ nc.Logo = ['\color[rgb]{0.3608,0.4,0.43529}NICE',...    % put a logo
            '\color[rgb]{0.9,0.11,1.0}CLBR'];
 nc.LogoFontName = "Impact";                             % set logo font name
 nc.saveAsPNG();                                         % save figure as PNG image
+nc.saveAsTIFF();                                        % save figure as TIFF image
 nc.saveAsPDF();                                         % print figure to a PDF file
 nc.saveAsFIG();                                         % save as MATLAB figure
 ```
@@ -199,15 +203,16 @@ at any time to reprint the command list; `exit` ends the session.
 | `style` | Prompts for a style name and assigns `Style`. |
 | `colors` | Prompts for a color count and assigns `NumColormapColors`. |
 | `colormap` | Prompts for a colormap name and assigns `ColormapName`. |
-| `dark` / `light` | Sets `ThemeMode` on every `niceColorbar` instance on the current figure. |
+| `dark` / `light` / `cobalt` | Sets `ThemeMode` on every `niceColorbar` instance on the current figure. |
 | `autoscale.on` | Prompts for a decimal count (blank = 2), assigns `TickLabelsAutoScaleDecimals`, then sets `TickLabelsAutoScale = true`. |
 | `autoscale.off` | Sets `TickLabelsAutoScale = false`. |
+| `box.on` / `box.off` | Toggles the axes' `Box`. |
 | `hide.colorbar` / `show.colorbar` | Toggles `ColorbarVisible`. |
 | `hide.title` / `show.title` | Toggles `TitleVisible`. |
 | `hide.logo` / `show.logo` | Toggles `LogoVisible`. |
 | `hide.all` / `show.all` | Toggles the bar, title, and logo together in one refresh. |
 | `side.left` / `side.right` / `side.top` / `side.bottom` | Assigns `Side`. |
-| `save.png` / `save.pdf` / `save.fig` | Opens a save dialog (`uiputfile`) and exports via `saveAsPNG`/`saveAsPDF`/`saveAsFIG`. |
+| `save.png` / `save.tiff` / `save.pdf` / `save.fig` | Opens a save dialog (`uiputfile`) and exports via `saveAsPNG`/`saveAsTIFF`/`saveAsPDF`/`saveAsFIG`. |
 | `exit` | Ends the session. |
 
 If no `niceColorbar` is registered on the current figure, commands that need
@@ -264,9 +269,10 @@ These three cases are locked in by regression tests in `niceColorbarTest.m`.
 | `setCappedLimits(newLimits)` | Like `setLimits`, but caps out-of-range values to `CappedColorBelow`/`CappedColorAbove` instead of stretching the gradient. Requires `colorbar()` to have been called first. |
 | `resetLimits()` | Reverts limits to what they were when `colorbar()` was first called, clearing capped mode. |
 | `saveAsPNG(folder, fileName)` | Exports the attached figure as a PNG at `ExportResolution` DPI (default 300). Both arguments are optional — omitted, a name is auto-generated from the figure number and a timestamp and written to a `SavedFigures` folder inside the toolbox. |
+| `saveAsTIFF(folder, fileName)` | Like `saveAsPNG`, but exports a TIFF at `ExportResolution` DPI. |
 | `saveAsPDF(folder, fileName)` | Like `saveAsPNG`, but exports a PDF via `exportgraphics`, rasterized or vector depending on `PdfRender`. |
 | `saveAsFIG(folder, fileName)` | Like `saveAsPNG`, but saves an editable MATLAB `.fig` file via `savefig`, re-openable with the colorbar and its styling intact. |
-| `session()` *(static)* | Interactive console loop for adjusting the colorbar under keyboard focus (`limits`, `limits.capped`, `limits.reset`, `style`, `colors`, `colormap`, `dark`, `light`, `autoscale.on`, `autoscale.off`, `hide.colorbar`, `show.colorbar`, `hide.title`, `show.title`, `hide.logo`, `show.logo`, `hide.all`, `show.all`, `side.left`, `side.right`, `side.top`, `side.bottom`, `save.png`, `save.pdf`, `save.fig`, `exit`). |
+| `session()` *(static)* | Interactive console loop for adjusting the colorbar under keyboard focus (`limits`, `limits.capped`, `limits.reset`, `style`, `colors`, `colormap`, `dark`, `light`, `cobalt`, `autoscale.on`, `autoscale.off`, `box.on`, `box.off`, `hide.colorbar`, `show.colorbar`, `hide.title`, `show.title`, `hide.logo`, `show.logo`, `hide.all`, `show.all`, `side.left`, `side.right`, `side.top`, `side.bottom`, `save.png`, `save.tiff`, `save.pdf`, `save.fig`, `exit`). |
 
 ## Properties
 
@@ -305,18 +311,23 @@ auto-refreshes in place, no rebuild call required.
 | `Side` | `nc.Side = "top";` |
 | `PdfRender` | `nc.PdfRender = "vector";` |
 | `ExportResolution` | `nc.ExportResolution = 600;` |
+| `Box` | `nc.Box = "off";` |
 
-`ColorbarVisible`/`TitleVisible`/`LogoVisible` each take `'on'`/`'off'` and
-independently hide/show the bar, title, or logo in place, without discarding
-or rebuilding anything; set all three to hide/show everything at once. `Side`
-takes `'right'` (default), `'left'`, `'top'`, or `'bottom'` — which side of
-the plot the colorbar, title, and logo are placed on; for `'top'`/`'bottom'`
-the colorbar runs horizontally with the Title to its left and the Logo to its
+`ThemeMode` takes `'auto'` (default, follows MATLAB's current light/dark
+theme), `'light'`, `'dark'`, or `'cobalt'` (a second, explicit-only dark
+theme with no `'auto'` detection of its own). `ColorbarVisible`/
+`TitleVisible`/`LogoVisible` each take `'on'`/`'off'` and independently
+hide/show the bar, title, or logo in place, without discarding or rebuilding
+anything; set all three to hide/show everything at once. `Side` takes
+`'right'` (default), `'left'`, `'top'`, or `'bottom'` — which side of the
+plot the colorbar, title, and logo are placed on; for `'top'`/`'bottom'` the
+colorbar runs horizontally with the Title to its left and the Logo to its
 right, both read horizontally. `PdfRender` takes `'image'` (default,
 rasterized, fast) or `'vector'` (crisp/scalable, slower) and controls
 `saveAsPDF`'s `exportgraphics` `ContentType`; `ExportResolution` is the
-pixels-per-inch used by `saveAsPNG` and by `saveAsPDF` while `PdfRender` is
-`'image'`.
+pixels-per-inch used by `saveAsPNG`, `saveAsTIFF`, and by `saveAsPDF` while
+`PdfRender` is `'image'`. `Box` takes `'on'` (default) or `'off'` and
+controls whether the axes' box outline is drawn.
 
 Each niceColorbar instance tracks its own figure/axes, so multiple instances
 (e.g. one per subplot, or one per docked figure) refresh independently.
@@ -377,7 +388,7 @@ niceColorbar is free to use. If it contributes to a plot or figure that
 appears in a publication, report, thesis, or other professional work, please
 cite it:
 
-> Ortiz-Bernardin, A. (2026). *niceColorbar* (Version 1.1.0) [MATLAB
+> Ortiz-Bernardin, A. (2026). *niceColorbar* (Version 1.2.0) [MATLAB
 > toolbox]. https://github.com/CAMLAB-UChile/niceColorbar
 
 A [`CITATION.cff`](CITATION.cff) file is also included, which GitHub uses to

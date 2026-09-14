@@ -3,6 +3,34 @@
 All notable changes to niceColorbar are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 1.2.0 — 2026-09-13
+
+### Added
+- `cobalt` theme mode: a second, explicit-only dark theme with no `'auto'`
+  detection of its own, selectable via `ThemeMode` or `session()`'s new
+  `cobalt` command.
+- `Box` property (`'on'`/`'off'`, default `'on'`) controlling the axes' box
+  outline — previously forced on unconditionally. Toggle live via
+  `session()`'s new `box.on`/`box.off` commands.
+- `saveAsTIFF` method for one-line TIFF export, alongside PNG/PDF/FIG;
+  `save.tiff` command in `session()`.
+- `simsolid` diverging colormap.
+- `handleSessionCommand`/`sessionCommandNames` exposed as reusable public
+  static methods, so other interactive sessions built on top of
+  `niceColorbar` can list/handle the same commands alongside their own.
+
+### Fixed
+- `saveAsPNG`/`saveAsTIFF` cropping flush against the outermost content,
+  clipping the Title/Logo/tick labels at the edge — both now export with a
+  small, fixed padding.
+- `saveAsPDF` with the default `PdfRender = "image"` paging to the source
+  figure's own size instead of the actual content, leaving the plot
+  floating in a mostly-blank page; also fixed a thin black border left by a
+  sub-point rounding gap introduced while fixing the page sizing.
+- A timer race (`StartDelay cannot be set while Timer is running`) that
+  could abort a figure's resize refresh when a rapid resize event landed
+  while the previous settle-timer callback was still finishing.
+
 ## 1.1.0 — 2026-07-29
 
 ### Added
