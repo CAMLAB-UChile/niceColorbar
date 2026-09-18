@@ -1156,6 +1156,35 @@ classdef niceColorbarTest < matlab.unittest.TestCase
       testCase.verifyNotEmpty(findobj(reopenedFig, 'Type', 'colorbar'));
     end
 
+    function testReopenedFIGRebuildsLiveInstanceAtSamePosition(testCase)
+      % Regression test: a niceColorbar reloaded from a saved .fig must come
+      % back as a fully live instance (auto-refresh/resize/session()
+      % support), positioned exactly where it was before saving - not just
+      % as inert graphics that drift out of place on the next resize (see
+      % restoreFromLoad()/colorbar()'s CreateFcn wiring).
+      [fig, ax] = testCase.createFigureWithAxes();
+      axes(ax);
+      nc = niceColorbar();
+      nc.Title = {'Reload Test'};
+      nc.colorbar();
+      drawnow(); pause(0.3); drawnow(); % let any async settle-timer pass finish before measuring
+      posBefore = findobj(fig, 'Type', 'colorbar').Position;
+
+      tmpDir = string(tempname);
+      mkdir(tmpDir);
+      testCase.addTeardown(@() rmdir(tmpDir, 's'));
+      nc.saveAsFIG(tmpDir, 'reloadTest');
+
+      reopenedFig = openfig(fullfile(tmpDir, 'reloadTest.fig'), 'invisible');
+      testCase.addTeardown(@() close(reopenedFig, 'force'));
+      drawnow(); pause(0.3); drawnow();
+
+      testCase.verifyEqual(findobj(reopenedFig, 'Type', 'colorbar').Position, posBefore, ...
+        'AbsTol', 1e-6);
+      set(groot, 'CurrentFigure', reopenedFig);
+      testCase.verifyNumElements(niceColorbar.instancesOnCurrentFigure(), 1);
+    end
+
     %% session() interactive console — only a smoke check is feasible here,
     %% since session() blocks on input() and can't be driven headlessly
     function testSessionMethodIsRegistered(testCase)

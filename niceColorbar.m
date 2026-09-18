@@ -91,6 +91,14 @@ classdef niceColorbar < handle
                % toggleable property, also reachable via session()'s box.on/box.off.
   end
 
+  properties (Constant, Access = private)
+    InternalObjTag = "niceColorbar:internal" % Tag stamped on every graphics
+      % object niceColorbar creates itself (the native colorbar, Title/Logo/
+      % exponent text) so restoreFromLoad() can find and clear out orphaned
+      % copies left behind by a reloaded .fig, without touching anything the
+      % user added to the same axes/figure.
+  end
+
   properties (Access = private)
     fig    % figure container object
     ax     % current axes object
@@ -410,7 +418,7 @@ classdef niceColorbar < handle
       % niceColorbar's colorbar public method
       obj.clb = colorbar("FontName",obj.TickLabelsFontName,"FontSize",obj.TickLabelsFontSize,...
                          "FontWeight",obj.TickLabelsFontWeight,"LineWidth",obj.TickLineWidth,...
-                         "Color",obj.TickLineColor);
+                         "Color",obj.TickLineColor,"Tag",obj.InternalObjTag);
 
       % mark built BEFORE applying properties, since applyProperties() is
       % the same routine refresh() calls later - guarding on obj.Built is
@@ -519,6 +527,42 @@ classdef niceColorbar < handle
       if isempty(obj.PropListener)
         obj.PropListener = addlistener(obj, properties(obj), 'PostSet', @(~,~) obj.refresh());
       end
+
+      %% make this niceColorbar survive being saved to a .fig and reopened.
+      % obj itself (a handle object with listeners/timers) is never part of
+      % what MATLAB serializes into a .fig - only the plain graphics
+      % (axes/colorbar/title/logo text) and appdata are - so resizeHub loses
+      % this instance's registration on reload, and every property/resize
+      % listener above goes with it: SizeChangedFcn is still saved (it's a
+      % plain handle to the static resizeHub dispatcher, capturing nothing),
+      % but dispatching into an empty registry silently does nothing, so the
+      % reloaded colorbar drifts out of position on the very next resize.
+      % The fix: snapshot every public property into a plain (fully
+      % serializable) struct in appdata, and point obj.ax's CreateFcn at
+      % restoreFromLoad() - CreateFcn only fires when this axes is actually
+      % (re)created, which happens on openfig()/uiopen() but never from a
+      % plain property assignment on the live object here - so a fresh,
+      % fully live niceColorbar gets rebuilt from the snapshot exactly once
+      % per reload, restoring auto-refresh/resize/session() support along
+      % with the correct layout.
+      mc = metaclass(obj);
+      isPublicProp = strcmp({mc.PropertyList.GetAccess},'public') & ...
+                     strcmp({mc.PropertyList.SetAccess},'public');
+      publicPropNames = {mc.PropertyList(isPublicProp).Name};
+      savedState = struct();
+      for i = 1:numel(publicPropNames)
+        savedState.(publicPropNames{i}) = obj.(publicPropNames{i});
+      end
+      setappdata(obj.ax,'niceColorbarState',savedState);
+      % OriginalAxesPosition (private, so not part of the public-property
+      % snapshot above) is the pristine, pre-shrink footprint captured at
+      % the very top of this method - saved separately so restoreFromLoad
+      % can put the axes back into that footprint before rebuilding.
+      % Without this, obj.ax.Position on reload is already the PREVIOUS
+      % build's shrunk-to-fit-the-colorbar box, so re-shrinking it again on
+      % top of that would compound and misplace the layout.
+      setappdata(obj.ax,'niceColorbarOriginalAxesPosition',obj.OriginalAxesPosition);
+      obj.ax.CreateFcn = @(src,~) niceColorbar.restoreFromLoad(src);
     end
 
     function setLimits(obj,newLimits)
@@ -1095,16 +1139,65 @@ classdef niceColorbar < handle
       list = niceColorbar.resizeHub('get',fig);
     end
 
-  end
+    function restoreFromLoad(ax)
+      % Assigned as obj.ax's CreateFcn at the end of colorbar() (see the
+      % comment there). Fires exactly when this axes is (re)created by
+      % openfig()/uiopen() from a saved .fig file - the live niceColorbar
+      % object that used to drive it didn't survive the save, so this
+      % rebuilds a fresh one from the plain-value snapshot left in appdata
+      % and re-runs colorbar() on it, which re-registers with resizeHub,
+      % reattaches SizeChangedFcn, and repositions everything correctly.
+      %
+      % Public (rather than private), like resizeHub below: a function
+      % handle assigned to a graphics callback (CreateFcn here,
+      % SizeChangedFcn for resizeHub) is reconstructed by MATLAB's .fig
+      % loader in a context that calls it as if from OUTSIDE the class -
+      % confirmed empirically (a fresh MATLAB process reopening a saved
+      % .fig throws "Cannot access method ... in class niceColorbar" /
+      % "Unable to resolve the name niceColorbar.<method>" for a PRIVATE
+      % static method referenced this way), even though the exact same
+      % handle works fine when created and invoked within one live session.
+      % Being public sidesteps that access check entirely.
+      %
+      % Note: capped-limit state (setCappedLimits' specific min/max) is
+      % private, not part of the public-property snapshot, so a colorbar
+      % reloaded while in capped mode comes back in ordinary (uncapped)
+      % mode - only the public appearance/style properties are restored.
+      if ~isvalid(ax) || ~isappdata(ax,'niceColorbarState')
+        return
+      end
+      fig = ancestor(ax,'figure');
+      if isempty(fig) || ~isvalid(fig)
+        return
+      end
+      savedState = getappdata(ax,'niceColorbarState');
 
-  methods (Access = private, Static)
+      % drop the reloaded (now orphaned - no live object controls them)
+      % colorbar/title/logo graphics; the fresh instance below rebuilds all
+      % of them from scratch via colorbar()/applyProperties()
+      if ~isempty(ax.Colorbar) && isvalid(ax.Colorbar)
+        delete(ax.Colorbar);
+      end
+      delete(findall(fig,'Tag',niceColorbar.InternalObjTag));
 
-    function printSessionCommands()
-      % wrapCommaList actually breaks this onto multiple printed lines (at
-      % most 100 columns each); string concatenation with '...' line
-      % continuations does not - it just builds one long line that looks
-      % broken up in the source but prints as a single wide line.
-      fprintf('Commands:\n%s\n',wrapCommaList(niceColorbar.sessionCommandNames(),100));
+      % undo the previous build's shrink-to-fit-the-colorbar footprint
+      % before rebuilding, so colorbar() captures the true pristine
+      % footprint as its new OriginalAxesPosition instead of compounding
+      % another shrink on top of the already-shrunk one (see colorbar()'s
+      % comment on niceColorbarOriginalAxesPosition)
+      if isappdata(ax,'niceColorbarOriginalAxesPosition')
+        ax.Units = 'normalized';
+        ax.Position = getappdata(ax,'niceColorbarOriginalAxesPosition');
+      end
+
+      nc = niceColorbar();
+      fns = fieldnames(savedState);
+      for i = 1:numel(fns)
+        nc.(fns{i}) = savedState.(fns{i});
+      end
+      set(groot,'CurrentFigure',fig);
+      set(fig,'CurrentAxes',ax);
+      nc.colorbar();
     end
 
     function out = resizeHub(action,fig,obj)
@@ -1116,6 +1209,16 @@ classdef niceColorbar < handle
       % registered against that figure. Being a Static method (rather than
       % a plain local function) lets it call the private onResize() on any
       % instance, not just the one that happens to own the call.
+      %
+      % Public (not private): SizeChangedFcn holds a function handle to
+      % this method, and that handle must keep resolving after a saved
+      % .fig is reopened in a brand-new MATLAB session - see
+      % restoreFromLoad()'s comment for why a private static method fails
+      % that specific case even though every other (in-session, non
+      % serialized) call site works regardless of access level. Called only
+      % with an internal action string ('register'/'dispatch'/'get'), so
+      % this stays an implementation detail in practice despite being
+      % reachable from outside the class.
       %
       % (Interactive 3-D rotation is handled separately, via a per-axes
       % View listener set up in colorbar() - see that listener's comment
@@ -1135,7 +1238,19 @@ classdef niceColorbar < handle
             keep = true(size(list));
             for i = 1:numel(list)
               h = list{i};
-              if ~isvalid(h)
+              if ~niceColorbar.isLiveInstance(h)
+                % MATLAB recycles a closed figure/axes' numeric handle, so a
+                % stale entry left behind under this same key (e.g. from a
+                % figure that was closed without ever dispatching/getting
+                % against it again) can otherwise look "valid" - h itself
+                % (the niceColorbar wrapper) is never delete()'d just
+                % because the figure it wrapped was closed, only its own
+                % fig/ax properties go stale. Checking those too (see
+                % isLiveInstance) is what stops that stale entry from
+                % surviving alongside a brand-new instance that happens to
+                % reuse the same recycled handle - confirmed to otherwise
+                % double-register when a .fig is closed and a new/reloaded
+                % figure lands on the same freed handle within one session.
                 keep(i) = false;
               elseif h == obj || isequal(h.ax,obj.ax)
                 % h==obj: re-registering this same instance (e.g.
@@ -1171,7 +1286,7 @@ classdef niceColorbar < handle
         case 'dispatch'
           if isKey(registry,key)
             list = registry(key);
-            list = list(cellfun(@isvalid,list));
+            list = list(cellfun(@niceColorbar.isLiveInstance,list));
             if isempty(list)
               remove(registry,key);
             else
@@ -1187,7 +1302,7 @@ classdef niceColorbar < handle
           % currentInstance() to find which object session() should target
           if isKey(registry,key)
             list = registry(key);
-            list = list(cellfun(@isvalid,list));
+            list = list(cellfun(@niceColorbar.isLiveInstance,list));
           else
             list = {};
           end
@@ -1197,6 +1312,30 @@ classdef niceColorbar < handle
           % internally from this file - no other value is ever passed
           error('niceColorbar:resizeHub:invalidAction','unknown action ''%s''',action);
       end
+    end
+
+  end
+
+  methods (Access = private, Static)
+
+    function tf = isLiveInstance(h)
+      % True only for a niceColorbar wrapper (h) that is itself isvalid()
+      % AND still wraps live graphics. isvalid(h) alone is not enough: h
+      % stays isvalid() until it is explicitly delete()'d or garbage
+      % collected, neither of which happens just because the figure/axes it
+      % wrapped was closed - only h's own fig/ax properties go stale. Used
+      % by resizeHub to purge entries left behind under a registry key
+      % (a figure's numeric handle) that MATLAB later recycles for an
+      % unrelated figure.
+      tf = isvalid(h) && ~isempty(h.fig) && isvalid(h.fig) && ~isempty(h.ax) && isvalid(h.ax);
+    end
+
+    function printSessionCommands()
+      % wrapCommaList actually breaks this onto multiple printed lines (at
+      % most 100 columns each); string concatenation with '...' line
+      % continuations does not - it just builds one long line that looks
+      % broken up in the source but prints as a single wide line.
+      fprintf('Commands:\n%s\n',wrapCommaList(niceColorbar.sessionCommandNames(),100));
     end
 
     function sharedPollTimer(action)
@@ -1540,7 +1679,7 @@ classdef niceColorbar < handle
                                           % about it looks altered besides Visible
           if isempty(obj.ZExpLabelObj) || ~isvalid(obj.ZExpLabelObj)
             obj.ZExpLabelObj = text(obj.ax,0,0,0,'','Units','pixels', ...
-              'XLimInclude','off','YLimInclude','off','ZLimInclude','off');
+              'XLimInclude','off','YLimInclude','off','ZLimInclude','off','Tag',obj.InternalObjTag);
           end
           obj.ZExpLabelObj.Units = 'pixels';
           obj.ZExpLabelObj.String = nativeExpLabel.String;
@@ -1597,10 +1736,11 @@ classdef niceColorbar < handle
           % annotation('textbox',...) instead, only for a 3-D axes (a 2-D
           % axes' child text has no such issue - see updateColorbarLayout).
           h = annotation(obj.fig,'textbox',[0 0 0.01 0.01],'Units','pixels', ...
-                'EdgeColor','none','LineStyle','none','FitBoxToText','on','Margin',0);
+                'EdgeColor','none','LineStyle','none','FitBoxToText','on','Margin',0, ...
+                'Tag',obj.InternalObjTag);
           obj.TitleLineObjs{i} = h;
         else
-          h = text(obj.ax,0,0,'','Units','pixels');
+          h = text(obj.ax,0,0,'','Units','pixels','Tag',obj.InternalObjTag);
           % keep this overlay text from ever nudging obj.ax's data limits
           % (it's positioned in pixels above the colorbar, not tied to any
           % data point)
@@ -1648,9 +1788,10 @@ classdef niceColorbar < handle
             % axes needs a figure-level annotation instead of an axes-child
             % text here
             obj.ylb = annotation(obj.fig,'textbox',[0 0 0.01 0.01],'Units','pixels', ...
-                'EdgeColor','none','LineStyle','none','FitBoxToText','on','Margin',0);
+                'EdgeColor','none','LineStyle','none','FitBoxToText','on','Margin',0, ...
+                'Tag',obj.InternalObjTag);
           else
-            obj.ylb = text(obj.ax,0,0,'','Units','pixels');
+            obj.ylb = text(obj.ax,0,0,'','Units','pixels','Tag',obj.InternalObjTag);
             % keep this overlay text from ever nudging obj.ax's data limits
             % (it's positioned in pixels below the colorbar, not tied to any
             % data point) - same reasoning as TitleLineObjs above
@@ -1694,9 +1835,10 @@ classdef niceColorbar < handle
         if isempty(obj.ExpLabelObj) || ~isvalid(obj.ExpLabelObj)
           if use3DOverlay
             obj.ExpLabelObj = annotation(obj.fig,'textbox',[0 0 0.01 0.01],'Units','pixels', ...
-                'EdgeColor','none','LineStyle','none','FitBoxToText','on','Margin',0);
+                'EdgeColor','none','LineStyle','none','FitBoxToText','on','Margin',0, ...
+                'Tag',obj.InternalObjTag);
           else
-            obj.ExpLabelObj = text(obj.ax,0,0,'','Units','pixels');
+            obj.ExpLabelObj = text(obj.ax,0,0,'','Units','pixels','Tag',obj.InternalObjTag);
             obj.ExpLabelObj.XLimInclude = 'off';
             obj.ExpLabelObj.YLimInclude = 'off';
             obj.ExpLabelObj.ZLimInclude = 'off';

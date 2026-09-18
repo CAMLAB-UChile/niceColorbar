@@ -219,6 +219,59 @@ If no `niceColorbar` is registered on the current figure, commands that need
 one print a message instead of erroring, so a stray keystroke or an
 unfocused figure never breaks the loop.
 
+## Reopening saved .fig files
+
+A `.fig` saved via `saveAsFIG`/`session()`'s `save.fig` reopens with the
+colorbar, title, and logo positioned exactly as they were, and — as long as
+`niceColorbar` is on the MATLAB path of whatever session reopens it (see
+below) — comes back as a fully live instance: auto-refresh, resize handling,
+and `session()` support all keep working, not just the static image.
+
+That last part only works because reopening a `.fig` re-triggers callbacks
+(`CreateFcn`, `SizeChangedFcn`) that call back into the `niceColorbar` class
+itself to rebuild the live object. If `niceColorbar` isn't resolvable in the
+MATLAB session doing the reopening, those calls fail — typically the moment
+you resize the figure, with an error like:
+
+```
+Unable to resolve the name 'niceColorbar.resizeHub'.
+```
+
+This has nothing to do with where the `.fig` file itself lives (e.g. on the
+Desktop) — it's about whether `niceColorbar` is on the path of the session
+that opens it. It's easy to hit this without noticing: double-clicking a
+`.fig` file starts a fresh MATLAB session whose current folder is wherever
+the file sits, and `niceColorbar` is only visible there if it's on your
+**permanent, saved** MATLAB path — being on the path during the session that
+originally *created* the figure is not enough.
+
+**If you installed the packaged toolbox** (see [Installation](#installation)),
+this is already handled — Add-On installation adds `niceColorbar` to the
+saved path automatically.
+
+**If you're working from the source folder**, make sure it's saved to your
+path, not just added for the current session:
+
+```matlab
+addpath('path/to/niceColorbar')
+savepath
+```
+
+`savepath` is what makes the entry persist into every future MATLAB session,
+including one started by double-clicking a `.fig` file. Verify it took
+effect from a fresh session (any `pwd`, not just the source folder):
+
+```matlab
+which niceColorbar -all
+```
+
+The first line listed is the copy that actually wins. If you keep more than
+one copy of `niceColorbar` around (e.g. an installed release version plus a
+separate source checkout you're developing against), `which niceColorbar
+-all` also shows every shadowed copy in resolution order — useful for
+confirming which one a reopened figure will actually call into, since only
+the first match on the path is used.
+
 ## Char vs string arguments
 
 Like MATLAB's own built-ins, most text arguments and properties accept either
@@ -388,7 +441,7 @@ niceColorbar is free to use. If it contributes to a plot or figure that
 appears in a publication, report, thesis, or other professional work, please
 cite it:
 
-> Ortiz-Bernardin, A. (2026). *niceColorbar* (Version 1.2.0) [MATLAB
+> Ortiz-Bernardin, A. (2026). *niceColorbar* (Version 1.2.1) [MATLAB
 > toolbox]. https://github.com/CAMLAB-UChile/niceColorbar
 
 A [`CITATION.cff`](CITATION.cff) file is also included, which GitHub uses to

@@ -3,6 +3,19 @@
 All notable changes to niceColorbar are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 1.2.1 — 2026-09-17
+
+### Fixed
+- A `niceColorbar` saved via `saveAsFIG`/`session()`'s `save.fig` and
+  reopened lost its live auto-refresh/resize handling entirely (state that
+  drives it lives in memory and never survives `.fig` serialization), so the
+  colorbar silently drifted out of position on the next resize/maximize/dock.
+  `colorbar()` now snapshots enough state into the figure to rebuild a fully
+  live instance the moment the `.fig` is reopened.
+- A related `resizeHub` bug where a stale registry entry could survive under
+  a figure handle MATLAB later recycles for a new/reloaded figure, causing
+  double-registration.
+
 ## 1.2.0 — 2026-09-13
 
 ### Added
