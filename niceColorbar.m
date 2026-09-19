@@ -1318,6 +1318,117 @@ classdef niceColorbar < handle
 
   methods (Access = private, Static)
 
+    function img = renderRasterSafely(fig,requestedResolution,paddingPts)
+      % exportgraphics' raster ('Resolution'-based) text rasterizer has a
+      % confirmed MATLAB defect (observed on R2026a): past some resolution
+      % and figure-geometry-dependent pixel size, part of a text glyph
+      % (e.g. one axis tick label) gets sheared off - reproduced
+      % independent of exportgraphics vs. the legacy print function and of
+      % 'painters' vs. 'opengl' Renderer, so it cannot be worked around by
+      % choosing a different export call or renderer. The exact
+      % resolution/geometry combination that triggers it is not
+      % predictable ahead of time (confirmed non-monotonic across a
+      % resolution sweep on an affected figure: e.g. clean at 520/550 DPI,
+      % broken at 560-600 DPI, with the clipped edge even flipping between
+      % adjacent DPI values), so no fixed "safe" ExportResolution can be
+      % assumed globally correct going forward.
+      %
+      % SAFE_RESOLUTION is a DPI confirmed clean throughout that sweep. A
+      % request at or under it is rendered directly, unchanged from
+      % before. Above it, render at SAFE_RESOLUTION (avoiding the buggy
+      % rasterization pass entirely) and bicubic-upscale the resulting
+      % bitmap to the pixel size the requested resolution would have
+      % produced. Used by saveFigureAs for PNG/TIFF and for the PDF
+      % branch's raster capture (see also writeImageAsLosslessPdf, which
+      % addresses a separate defect in how that raster then gets embedded
+      % into a PDF).
+      SAFE_RESOLUTION = 300;
+      renderResolution = min(requestedResolution,SAFE_RESOLUTION);
+      tmpPath = [tempname,'.png'];
+      cleanupTmp = onCleanup(@() delete(tmpPath));
+      exportgraphics(fig,tmpPath,'Resolution',renderResolution,...
+        'Padding',paddingPts,'Units','points');
+      img = imread(tmpPath);
+      if requestedResolution > SAFE_RESOLUTION
+        img = imresize(img,requestedResolution/SAFE_RESOLUTION,'bicubic');
+      end
+    end
+
+    function writeImageAsLosslessPdf(img,filePath,resolutionDpi)
+      % Writes an RGB truecolor image as a single-page PDF whose page size
+      % (in points, 72 per inch) matches the image at resolutionDpi, with
+      % the image embedded as a lossless (FlateDecode) Image XObject - the
+      % same compression family PNG uses - instead of going through
+      % exportgraphics/print, both of which were confirmed (by reading the
+      % written PDF's raw bytes) to embed raster PDF content as JPEG
+      % (DCTDecode) with no accessible quality setting. That JPEG encoding
+      % is what previously made the PDF export visibly blurrier than the
+      % PNG/TIFF export of the same figure, most noticeably against a
+      % light/white background. This keeps the PDF visually identical to
+      % the PNG/TIFF exports.
+      imgH = size(img,1);
+      imgW = size(img,2);
+      wPts = imgW/resolutionDpi*72;
+      hPts = imgH/resolutionDpi*72;
+
+      % PDF image samples are ordered row-major, top row first, one byte
+      % per component (R,G,B interleaved) - permuting to
+      % [channel,column,row] before linearizing gives exactly that order.
+      rawBytes = permute(img,[3 2 1]);
+      rawBytes = rawBytes(:);
+
+      % zlib/deflate-compress via Java: Deflater.deflate(buffer) does not
+      % reliably reflect its output back into a plain numeric MATLAB
+      % array (the array is copied on each call into/out of the JVM), so
+      % a DeflaterOutputStream - which only requires write() calls, not
+      % reading a mutated buffer back - is used instead.
+      import java.util.zip.Deflater
+      import java.util.zip.DeflaterOutputStream
+      import java.io.ByteArrayOutputStream
+      baos = ByteArrayOutputStream();
+      dos = DeflaterOutputStream(baos,Deflater(Deflater.BEST_COMPRESSION),65536);
+      dos.write(rawBytes);
+      dos.finish();
+      dos.close();
+      compressedBytes = typecast(int8(baos.toByteArray()),'uint8');
+
+      fid = fopen(filePath,'wb'); % binary mode - required so the
+                                  % compressed stream's bytes are never
+                                  % translated (e.g. \n -> \r\n)
+      cleanupFid = onCleanup(@() fclose(fid));
+      offsets = zeros(1,5);
+      fwrite(fid,sprintf('%%PDF-1.4\n'),'char');
+
+      offsets(1) = ftell(fid);
+      fwrite(fid,sprintf('1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n'),'char');
+
+      offsets(2) = ftell(fid);
+      fwrite(fid,sprintf('2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n'),'char');
+
+      offsets(3) = ftell(fid);
+      fwrite(fid,sprintf(['3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 %.4f %.4f] ',...
+        '/Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R >>\nendobj\n'],wPts,hPts),'char');
+
+      offsets(4) = ftell(fid);
+      contentStr = sprintf('q %.4f 0 0 %.4f 0 0 cm /Im0 Do Q',wPts,hPts);
+      fwrite(fid,sprintf('4 0 obj\n<< /Length %d >>\nstream\n%s\nendstream\nendobj\n',...
+        numel(contentStr),contentStr),'char');
+
+      offsets(5) = ftell(fid);
+      fwrite(fid,sprintf(['5 0 obj\n<< /Type /XObject /Subtype /Image /Width %d /Height %d ',...
+        '/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length %d >>\nstream\n'],...
+        imgW,imgH,numel(compressedBytes)),'char');
+      fwrite(fid,compressedBytes,'uint8');
+      fwrite(fid,sprintf('\nendstream\nendobj\n'),'char');
+
+      xrefStart = ftell(fid);
+      fwrite(fid,sprintf('xref\n0 6\n0000000000 65535 f \n'),'char');
+      for i = 1:5
+        fwrite(fid,sprintf('%010d 00000 n \n',offsets(i)),'char');
+      end
+      fwrite(fid,sprintf('trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF',xrefStart),'char');
+    end
+
     function tf = isLiveInstance(h)
       % True only for a niceColorbar wrapper (h) that is itself isvalid()
       % AND still wraps live graphics. isvalid(h) alone is not enough: h
@@ -1427,9 +1538,19 @@ classdef niceColorbar < handle
         case {'png','tiff'}
           % 'tight' (exportgraphics' default Padding for png/tiff) crops flush
           % against the outermost content - a few points of slack keeps the
-          % Title/Logo/tick labels from looking clipped at the edge
-          exportgraphics(obj.fig,filePath,'Resolution',obj.ExportResolution, ...
-            'Padding',10,'Units','points');
+          % Title/Logo/tick labels from looking clipped at the edge.
+          % Routed through renderRasterSafely rather than a direct
+          % exportgraphics call to avoid a confirmed MATLAB defect where
+          % high-resolution raster export can shear off part of a text
+          % glyph (see renderRasterSafely's own comment).
+          img = niceColorbar.renderRasterSafely(obj.fig,obj.ExportResolution,10);
+          if strcmp(format,'png')
+            pixelsPerMeter = obj.ExportResolution/0.0254;
+            imwrite(img,filePath,'XResolution',pixelsPerMeter,...
+              'YResolution',pixelsPerMeter,'ResolutionUnit','meter');
+          else % tiff
+            imwrite(img,filePath,'Resolution',obj.ExportResolution);
+          end
         case 'pdf'
           if obj.PdfRender == "vector"
             % exportgraphics warns every time vector content is requested
@@ -1444,51 +1565,19 @@ classdef niceColorbar < handle
             exportgraphics(obj.fig,filePath,'ContentType','vector', ...
               'Padding',10,'Units','points');
           else
-            % For ContentType='image', exportgraphics pages a PDF to the
-            % SOURCE FIGURE'S OWN size, then places the tightly-cropped
-            % raster inside that fixed-size page - Padding only affects how
-            % tightly the raster itself is cropped, not the page dimensions.
-            % Since niceColorbar's axes are deliberately shrunk to leave
-            % room for the colorbar/title/logo, the figure canvas is
-            % usually much bigger than that raster, so the page ends up
-            % mostly blank around a small centered image. Sidestep this by
-            % rendering the same tightly-cropped/padded raster used by
-            % saveAsPNG/saveAsTIFF, then re-exporting THAT image (via a
-            % throwaway full-bleed figure sized to match it) as the PDF -
-            % its own page then has nothing to be tight against but the
-            % image itself.
-            tmpPngPath = [tempname,'.png'];
-            cleanupTmpPng = onCleanup(@() delete(tmpPngPath));
-            exportgraphics(obj.fig,tmpPngPath,'Resolution',obj.ExportResolution, ...
-              'Padding',10,'Units','points');
-            img = imread(tmpPngPath);
-            imgH = size(img,1);
-            imgW = size(img,2);
-            % Size the throwaway figure to the SAME aspect ratio as the
-            % image (scaled down to fit the screen if needed - a figure
-            % Position bigger than the screen gets silently clipped by
-            % MATLAB, which would reintroduce letterboxing below) so the
-            % full-bleed axes needs no aspect-preserving fit that could
-            % letterbox it against the image.
-            screenSize = get(0,'ScreenSize');
-            scaleFactor = min([1, 0.8*screenSize(4)/imgH, 0.8*screenSize(3)/imgW]);
-            imgFig = figure('Visible','off','Units','pixels', ...
-              'Position',[100 100 max(imgW*scaleFactor,50) max(imgH*scaleFactor,50)]);
-            cleanupImgFig = onCleanup(@() close(imgFig));
-            imgAx = axes(imgFig,'Units','normalized','Position',[0 0 1 1]);
-            image(imgAx,img);
-            axis(imgAx,'off');
-            imgAx.XLim = [0.5, imgW+0.5];
-            imgAx.YLim = [0.5, imgH+0.5];
-            wPts = imgW/obj.ExportResolution*72;
-            hPts = imgH/obj.ExportResolution*72;
-            % A sub-point rounding gap between the rendered content and the
-            % requested Width/Height page can otherwise show through as a
-            % thin black sliver (undrawn PDF page area) rather than
-            % matching the figure's own background.
-            exportgraphics(imgFig,filePath,'ContentType','image', ...
-              'Resolution',obj.ExportResolution,'Width',wPts,'Height',hPts,'Units','points', ...
-              'BackgroundColor',obj.ThemeBgColor);
+            % exportgraphics(...,'ContentType','image') embeds PDF raster
+            % content as JPEG (DCTDecode) with no accessible quality
+            % control - confirmed by inspecting the written PDF's byte
+            % stream - which visibly blurs fine grid lines/text edges
+            % compared to the lossless PNG/TIFF exports of the exact same
+            % figure (most noticeable against a light/white background).
+            % Sidestep exportgraphics' PDF encoder entirely: render the
+            % same tightly-cropped/padded raster used by
+            % saveAsPNG/saveAsTIFF, then embed THAT raster losslessly
+            % (zlib/FlateDecode, like PNG) into a minimal, hand-written
+            % single-page PDF - see writeImageAsLosslessPdf.
+            img = niceColorbar.renderRasterSafely(obj.fig,obj.ExportResolution,10);
+            niceColorbar.writeImageAsLosslessPdf(img,filePath,obj.ExportResolution);
           end
         case 'fig'
           % savefig(), not exportgraphics() - .fig is MATLAB's own editable

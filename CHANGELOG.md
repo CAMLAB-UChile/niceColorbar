@@ -3,6 +3,22 @@
 All notable changes to niceColorbar are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 1.2.2 — 2026-09-19
+
+### Fixed
+- High-resolution PNG/TIFF/PDF export could shear off part of a text glyph
+  (e.g. one axis tick label) due to a MATLAB rasterizer defect at certain
+  resolution/figure-geometry combinations. Raster exports above 300 DPI now
+  render at a confirmed-clean 300 DPI and are bicubic-upscaled to the
+  requested resolution instead of rendering natively at high DPI.
+- `saveAsPDF` with the default `PdfRender = "image"` embedded its raster
+  content as JPEG with no quality control, making it visibly blurrier than
+  the PNG/TIFF export of the same figure (most noticeable against a
+  light/white background). It now embeds the raster losslessly
+  (zlib/FlateDecode, the same compression family PNG uses) via a
+  hand-written PDF writer instead of going through `exportgraphics`'s JPEG
+  encoder.
+
 ## 1.2.1 — 2026-09-17
 
 ### Fixed
