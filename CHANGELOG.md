@@ -3,6 +3,16 @@
 All notable changes to niceColorbar are documented here. Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 1.2.3 — 2026-09-25
+
+### Fixed
+- MATLAB File Exchange showed niceColorbar as version 1.0.0, with its
+  version history gone, after the entry was converted into an R2026b MATLAB
+  package (installable via `mpminstall`). The repository had no package
+  metadata to take a version from, so it fell back to 1.0.0. Added
+  `resources/mpackage.json`, which declares the package version and reuses
+  the toolbox's existing ID so it stays the same package. No code changes.
+
 ## 1.2.2 — 2026-09-19
 
 ### Fixed

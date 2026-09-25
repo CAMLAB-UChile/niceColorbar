@@ -1,0 +1,28 @@
+{
+    "name": "niceColorbar",
+    "version": "1.2.3",
+    "id": "dc06a7ee-a5b7-4639-a6fd-b26994b04b54",
+    "formerNames": [],
+    "displayName": "niceColorbar",
+    "summary": "A drop-in, styled replacement for MATLAB's colorbar with themes, LaTeX titles, and auto-refresh.",
+    "tags": [],
+    "readme": "README.md",
+    "provider": {
+        "name": "Alejandro Ortiz-Bernardin",
+        "organization": "Mech. Eng. Dept., Universidad de Chile",
+        "email": "",
+        "url": "https://github.com/CAMLAB-UChile/niceColorbar"
+    },
+    "folders": [],
+    "dependencies": [],
+    "releaseCompatibility": ">=R2024b",
+    "supportedPlatforms": [
+        {
+            "platform": "any",
+            "architectures": [
+                "any"
+            ]
+        }
+    ],
+    "schemaVersion": "1.2.0"
+}

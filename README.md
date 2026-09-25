@@ -441,7 +441,7 @@ niceColorbar is free to use. If it contributes to a plot or figure that
 appears in a publication, report, thesis, or other professional work, please
 cite it:
 
-> Ortiz-Bernardin, A. (2026). *niceColorbar* (Version 1.2.2) [MATLAB
+> Ortiz-Bernardin, A. (2026). *niceColorbar* (Version 1.2.3) [MATLAB
 > toolbox]. https://github.com/CAMLAB-UChile/niceColorbar
 
 A [`CITATION.cff`](CITATION.cff) file is also included, which GitHub uses to
